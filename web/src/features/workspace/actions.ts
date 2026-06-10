@@ -3,6 +3,7 @@ import { clamp, type Job, type PDFFile, type StampAsset } from '../../lib/types'
 import { activeFile, hasConfig, switchFile, useEditorStore } from '../../state/store'
 import { toast } from '../../state/toasts'
 import { prepareStamp } from '../stamps/importPipeline'
+import { forgetStamp, generateStampId, persistStamp, rehydrateStamps } from '../stamps/persistence'
 import { askImportTarget } from './importPrompt'
 import { askPassword } from './passwordPrompt'
 
@@ -39,6 +40,40 @@ export async function refreshWorkspace() {
     useEditorStore.getState().setWorkspace(files ?? [], stamps ?? [], jobs ?? [])
   } catch (err) {
     toast(errorText(err), { kind: 'error' })
+  }
+}
+
+let bootPromise: Promise<void> | null = null
+
+/** 应用启动引导：拉取工作区 + 印章浏览器持久层重水化/迁移（StrictMode 双触发安全）。 */
+export function bootstrapWorkspace(): Promise<void> {
+  bootPromise ??= runBootstrap().catch((err) => {
+    bootPromise = null
+    toast(errorText(err), { kind: 'error' })
+  })
+  return bootPromise
+}
+
+async function runBootstrap() {
+  const [files, stamps, jobs] = await Promise.all([
+    getJSON<PDFFile[]>('/api/files'),
+    getJSON<StampAsset[]>('/api/stamps'),
+    getJSON<Job[]>('/api/jobs')
+  ])
+  const { stamps: merged, keepMetaIds, failed } = await rehydrateStamps(stamps ?? [])
+  useEditorStore.getState().setWorkspace(files ?? [], merged, jobs ?? [])
+  useEditorStore.getState().pruneStampMeta(keepMetaIds)
+  if (failed > 0) {
+    toast(`${failed} 个印章未能恢复，请检查网络后重试`, {
+      kind: 'error',
+      action: {
+        label: '重试',
+        onClick: () => {
+          bootPromise = null
+          void bootstrapWorkspace()
+        }
+      }
+    })
   }
 }
 
@@ -233,8 +268,11 @@ export async function uploadStamps(files: File[]) {
     for (const file of files) {
       try {
         const prepared = await prepareStamp(file)
-        const asset = await upload<StampAsset>('/api/stamps', prepared.blob, prepared.name)
+        const asset = await upload<StampAsset>('/api/stamps', prepared.blob, prepared.name, {
+          stampId: generateStampId()
+        })
         uploaded.push(asset)
+        void persistStamp(asset, prepared.blob)
         if (prepared.whitened) whitened.push({ asset, original: file })
       } catch (err) {
         toast(`${file.name}：${errorText(err)}`, { kind: 'error' })
@@ -259,10 +297,14 @@ async function revertWhiten(items: Array<{ asset: StampAsset; original: File }>)
   for (const { asset, original } of items) {
     try {
       const prepared = await prepareStamp(original, { whiten: false })
-      const fresh = await upload<StampAsset>('/api/stamps', prepared.blob, prepared.name)
+      const fresh = await upload<StampAsset>('/api/stamps', prepared.blob, prepared.name, {
+        stampId: generateStampId()
+      })
+      void persistStamp(fresh, prepared.blob)
       useEditorStore.getState().upsertStamps([fresh])
       useEditorStore.getState().swapStamp(asset.stampId, fresh.stampId)
       await deleteJSON(`/api/stamps/${asset.stampId}`)
+      void forgetStamp(asset.stampId)
     } catch (err) {
       toast(`恢复 ${original.name} 失败：${errorText(err)}`, { kind: 'error' })
       return
@@ -284,6 +326,7 @@ export async function deleteFileAction(file: PDFFile) {
 export async function deleteStampAction(stamp: StampAsset) {
   try {
     await deleteJSON(`/api/stamps/${stamp.stampId}`)
+    void forgetStamp(stamp.stampId)
     useEditorStore.getState().removeStamp(stamp.stampId)
     toast(`已删除印章 ${stamp.name}`)
   } catch (err) {

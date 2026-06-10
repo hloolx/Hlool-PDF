@@ -65,6 +65,8 @@ export type EditorState = PersistedState & {
   setTheme: (theme: 'light' | 'dark') => void
   setStampDefaults: (patch: Partial<StampDefaults>) => void
   setStampMeta: (stampId: string, patch: StampMeta) => void
+  /** 清理不再存在的印章的别名等元数据（boot 重水化后按 id 并集调用）。 */
+  pruneStampMeta: (keepIds: string[]) => void
   setRangeText: (text: string) => void
   setOutputNameTemplate: (template: string) => void
   setOutputPassword: (password: string) => void
@@ -196,9 +198,12 @@ export const useEditorStore = create<EditorState>()(
               seam: seamUsesStamp ? { ...config.seam, stampId: null } : config.seam
             }
           }
+          const stampMeta = { ...state.stampMeta }
+          delete stampMeta[stampId]
           return {
             stamps: state.stamps.filter((s) => s.stampId !== stampId),
             configs,
+            stampMeta,
             armedStampId: state.armedStampId === stampId ? null : state.armedStampId,
             lastStampId: state.lastStampId === stampId ? null : state.lastStampId,
             selection: null
@@ -226,6 +231,13 @@ export const useEditorStore = create<EditorState>()(
       setStampDefaults: (patch) => set((state) => ({ stampDefaults: { ...state.stampDefaults, ...patch } })),
       setStampMeta: (stampId, patch) =>
         set((state) => ({ stampMeta: { ...state.stampMeta, [stampId]: { ...state.stampMeta[stampId], ...patch } } })),
+      pruneStampMeta: (keepIds) =>
+        set((state) => {
+          const keep = new Set(keepIds)
+          const entries = Object.entries(state.stampMeta).filter(([id]) => keep.has(id))
+          if (entries.length === Object.keys(state.stampMeta).length) return {}
+          return { stampMeta: Object.fromEntries(entries) }
+        }),
       setRangeText: (rangeText) => set({ rangeText }),
       setOutputNameTemplate: (outputNameTemplate) => set({ outputNameTemplate }),
       setOutputPassword: (outputPassword) => set({ outputPassword }),

@@ -15,7 +15,7 @@ import { ThemeFxLayer } from '../features/theme/ThemeFx'
 import { WindowDropZone } from '../features/workspace/WindowDropZone'
 import { ImportChoiceDialog } from '../features/workspace/ImportChoiceDialog'
 import { PasswordDialog } from '../features/workspace/PasswordDialog'
-import { refreshWorkspace } from '../features/workspace/actions'
+import { bootstrapWorkspace } from '../features/workspace/actions'
 import { TopBar } from './TopBar'
 import { useGlobalKeys } from './useGlobalKeys'
 
@@ -33,7 +33,7 @@ export function App() {
   }, [theme])
 
   useEffect(() => {
-    void refreshWorkspace()
+    void bootstrapWorkspace()
   }, [])
 
   useGlobalKeys()

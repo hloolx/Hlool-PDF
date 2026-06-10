@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#C8372D"/>
+  <rect x="7.5" y="7.5" width="49" height="49" rx="10" fill="none" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="3"/>
+  <text x="32" y="34" font-family="'Microsoft YaHei','PingFang SC','Noto Sans SC',system-ui,sans-serif" font-size="34" font-weight="700" fill="#FFFFFF" text-anchor="middle" dominant-baseline="central">印</text>
+</svg>

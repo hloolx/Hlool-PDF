@@ -42,8 +42,10 @@ export function TopBar() {
   return (
     <header className="flex h-[52px] shrink-0 items-center gap-1.5 border-b border-line bg-panel px-3">
       <div className="flex items-center gap-2 pr-2">
-        <span className="flex size-7 items-center justify-center rounded-lg bg-accent text-xs font-bold text-white shadow-sm">
+        {/* 印章式 logo：双线印框 + 微倾斜 + 启动时盖章入场 */}
+        <span className="anim-stamp-press relative flex size-7 -rotate-3 items-center justify-center rounded-lg bg-accent text-xs font-bold text-white shadow-sm">
           印
+          <span className="pointer-events-none absolute inset-[2.5px] rounded-md border border-white/40" aria-hidden />
         </span>
         <span className="text-[13px] font-semibold tracking-wide">hlool pdf</span>
       </div>
@@ -71,7 +73,7 @@ function BusyChip() {
   if (!busy) return null
   return (
     <span className="flex items-center gap-1.5 rounded-full bg-sunken px-2.5 py-1 text-xs text-ink-muted">
-      <Loader2 size={14} className="animate-spin" />
+      <Loader2 size={15} className="animate-spin" />
       {busy}
     </span>
   )
@@ -181,7 +183,7 @@ function ZoomMenu() {
       <MenuTrigger asChild>
         <Button variant="ghost" className="tnum w-[72px] justify-center px-1">
           {Math.round(zoom * 100)}%
-          <ChevronDown size={14} className="text-ink-muted" />
+          <ChevronDown size={15} className="text-ink-muted" />
         </Button>
       </MenuTrigger>
       <MenuContent className="min-w-36">
@@ -246,24 +248,26 @@ function GenerateSplitButton() {
             <ChevronDown size={16} />
           </Button>
         </MenuTrigger>
-        <MenuContent className="w-72">
-          <div className="grid gap-1 px-2.5 py-2 text-xs text-ink-muted">
-            <p className="flex justify-between gap-2">
-              <span>普通章</span>
-              <span className="tnum text-ink">{summary.placementCount} 个 · 覆盖 {summary.coverage} 页</span>
+        <MenuContent className="w-80 max-w-[calc(100vw-1rem)] overflow-hidden">
+          <div className="grid min-w-0 gap-1 px-2.5 py-2 text-xs text-ink-muted">
+            <p className="flex min-w-0 items-center justify-between gap-2">
+              <span className="shrink-0">普通章</span>
+              <span className="tnum min-w-0 truncate text-right text-ink">
+                {summary.placementCount} 个 · 覆盖 {summary.coverage} 页
+              </span>
             </p>
-            <p className="flex justify-between gap-2">
-              <span>骑缝章</span>
-              <span className="text-ink">{summary.seamEnabled ? '已启用' : '未启用'}</span>
+            <p className="flex min-w-0 items-center justify-between gap-2">
+              <span className="shrink-0">骑缝章</span>
+              <span className="min-w-0 truncate text-right text-ink">{summary.seamEnabled ? '已启用' : '未启用'}</span>
             </p>
-            <p className="flex justify-between gap-2">
-              <span>输出加密</span>
-              <span className="text-ink">{summary.encrypted ? 'AES-256' : '关'}</span>
+            <p className="flex min-w-0 items-center justify-between gap-2">
+              <span className="shrink-0">输出加密</span>
+              <span className="min-w-0 truncate text-right text-ink">{summary.encrypted ? 'AES-256' : '关'}</span>
             </p>
             {summary.outputName && (
-              <p className="flex justify-between gap-2">
+              <p className="flex min-w-0 items-center gap-2">
                 <span className="shrink-0">输出名</span>
-                <span className="truncate text-ink" title={summary.outputName}>
+                <span className="min-w-0 flex-1 truncate text-right text-ink" title={summary.outputName}>
                   {summary.outputName}
                 </span>
               </p>

@@ -2,6 +2,12 @@
 
 /* ---- 语义令牌（亮/暗两套，运行时切换） ---- */
 :root {
+  /* 动效令牌：时长三档 + 标准缓动，新动效一律引用这里 */
+  --dur-fast: 130ms;
+  --dur-base: 200ms;
+  --dur-slow: 300ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+
   --c-accent: #c8372d;
   --c-accent-hover: #b02e25;
   --c-accent-soft: #fbeae8;
@@ -156,24 +162,69 @@
   }
 }
 
+@keyframes pop-out {
+  to {
+    transform: translateY(4px) scale(0.98);
+    opacity: 0;
+  }
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes drawer-out {
+  to {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+@keyframes rise-out {
+  to {
+    transform: translateY(8px) scale(0.98);
+    opacity: 0;
+  }
+}
+
 .anim-stamp-press {
   animation: stamp-press 160ms ease-out;
 }
 
 .anim-rise {
-  animation: rise-in 200ms cubic-bezier(0.2, 0, 0, 1);
+  animation: rise-in var(--dur-base) var(--ease-out);
 }
 
 .anim-fade {
-  animation: fade-in 150ms ease-out;
+  animation: fade-in var(--dur-fast) ease-out;
 }
 
 .anim-drawer {
-  animation: drawer-in 200ms cubic-bezier(0.2, 0, 0, 1);
+  animation: drawer-in var(--dur-base) var(--ease-out);
 }
 
 .anim-pop {
-  animation: pop-in 140ms cubic-bezier(0.2, 0, 0, 1);
+  animation: pop-in 140ms var(--ease-out);
+}
+
+/* Radix 关闭态自动播放退出动画（Radix 会等 animationend 再卸载） */
+.anim-pop[data-state='closed'] {
+  animation: pop-out 130ms ease-in both;
+}
+
+.anim-fade[data-state='closed'] {
+  animation: fade-out 130ms ease-in both;
+}
+
+.anim-drawer[data-state='closed'] {
+  animation: drawer-out 180ms ease-in both;
+}
+
+/* Toast 退出（非 Radix，由 toasts.ts 的 closing 标记驱动） */
+.anim-toast-out {
+  animation: rise-out 180ms ease-in both;
 }
 
 /* 二次确认按钮的待确认脉冲 */
@@ -240,36 +291,91 @@
   0%,
   40% {
     opacity: 0;
+    transform: scale(0.4);
   }
   60%,
   82% {
     opacity: 1;
+    transform: scale(1);
   }
+  100% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+/* ---- 日出场景 ---- */
+@keyframes fx-sun-rise {
+  0% {
+    transform: translate(-50%, 56vh) scale(0.88);
+  }
+  55% {
+    transform: translate(-50%, 2vh) scale(1);
+  }
+  100% {
+    transform: translate(-50%, -2vh) scale(1.01);
+  }
+}
+
+/* 光晕呼吸：代替机械光芒线的柔和明暗起伏 */
+@keyframes fx-sun-glow {
+  from {
+    transform: scale(0.94);
+    opacity: 0.82;
+  }
+  to {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+}
+
+/* 地平线霞光随日出渐亮 */
+@keyframes fx-horizon {
+  0% {
+    opacity: 0;
+  }
+  45% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* 夜空残星在晨光中淡出 */
+@keyframes fx-star-out {
+  0% {
+    opacity: 0.9;
+  }
+  45%,
   100% {
     opacity: 0;
   }
 }
 
-@keyframes fx-sun-rise {
+/* 晨云缓缓飘入 */
+@keyframes fx-dawn-cloud {
   0% {
-    transform: translate(-50%, 64vh) scale(0.85);
+    transform: translateX(-3%);
+    opacity: 0;
   }
-  48% {
-    transform: translate(-50%, 4vh) scale(1);
-  }
-  78% {
-    transform: translate(-50%, 0) scale(1);
+  35% {
+    opacity: 1;
   }
   100% {
-    transform: translate(-50%, -3vh) scale(1.02);
+    transform: translateX(2.5%);
+    opacity: 1;
   }
 }
 
-@keyframes fx-spin-slow {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
+/* ---- 无障碍：系统减少动态偏好时压缩所有动画/过渡 ---- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

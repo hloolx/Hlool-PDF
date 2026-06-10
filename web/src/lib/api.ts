@@ -55,6 +55,12 @@ export async function upload<T>(url: string, file: Blob, name: string, fields?: 
   return parseJSON<T>(await fetch(url, { method: 'POST', body }))
 }
 
+export async function getBlob(url: string): Promise<Blob> {
+  const res = await fetch(url)
+  if (!res.ok) throw new ApiError(res.statusText || '请求失败', res.status)
+  return res.blob()
+}
+
 export function errorText(err: unknown) {
   return localizeError(err instanceof Error ? err.message : String(err))
 }
@@ -82,7 +88,8 @@ export function localizeError(value: string) {
     'at least one stamp or seam seal is required': '请先放置印章或启用骑缝章。',
     'too many PDF jobs are already running': '处理任务已排满，请稍候重试。',
     'PDF password is required': '该 PDF 受密码保护，请输入打开密码。',
-    'PDF password is incorrect': 'PDF 密码不正确，请重试。'
+    'PDF password is incorrect': 'PDF 密码不正确，请重试。',
+    'invalid stamp id': '印章标识无效。'
   }
   if (exact[text]) return exact[text]
   if (exact[lower]) return exact[lower]

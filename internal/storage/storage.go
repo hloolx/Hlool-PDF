@@ -10,9 +10,11 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"log"
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -20,6 +22,9 @@ import (
 )
 
 const maxStampPixels = 50_000_000
+
+// 服务端自生成 id 为 24 hex，浏览器端 crypto.randomUUID 去横线为 32 hex。
+var stampIDPattern = regexp.MustCompile(`^stamp_[0-9a-f]{24,64}$`)
 
 type PageInfo struct {
 	PageNumber int     `json:"pageNumber"`
@@ -39,14 +44,18 @@ type PDFFile struct {
 }
 
 type StampAsset struct {
-	ID        string    `json:"stampId"`
-	Name      string    `json:"name"`
-	Path      string    `json:"-"`
-	URL       string    `json:"url"`
-	Size      int64     `json:"size"`
-	WidthPx   int       `json:"widthPx"`
-	HeightPx  int       `json:"heightPx"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID       string `json:"stampId"`
+	Name     string `json:"name"`
+	Path     string `json:"-"`
+	URL      string `json:"url"`
+	Size     int64  `json:"size"`
+	WidthPx  int    `json:"widthPx"`
+	HeightPx int    `json:"heightPx"`
+	// SessionScoped 表示该印章已被浏览器端 IndexedDB 持久化认领，
+	// 服务器只作为本次会话的工作缓存，下次启动可清；false = 旧版遗留
+	// （legacy），在前端完成迁移认领前必须保留。
+	SessionScoped bool      `json:"sessionScoped"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 type Job struct {
@@ -82,7 +91,6 @@ func New(root string) (*Store, error) {
 			return nil, err
 		}
 	}
-	cleanupStartupTemps(root)
 	store := &Store{
 		root:   root,
 		pdfs:   map[string]*PDFFile{},
@@ -92,10 +100,56 @@ func New(root string) (*Store, error) {
 	if err := store.loadManifest(); err != nil {
 		return nil, err
 	}
+	store.wipeSession()
 	store.mu.Lock()
 	store.saveManifestLocked()
 	store.mu.Unlock()
 	return store, nil
+}
+
+// wipeSession 启动时清空会话数据：pdfs/、jobs/ 全清（含上次运行的各类临时
+// 与孤儿文件）；stamps/ 只保留 legacy 印章（sessionScoped=false，等待前端
+// 迁入浏览器 IndexedDB 后认领），其余连同孤儿文件一并删除。
+func (s *Store) wipeSession() {
+	s.mu.Lock()
+	cleared := len(s.pdfs) + len(s.jobs)
+	s.pdfs = map[string]*PDFFile{}
+	s.jobs = map[string]*Job{}
+	keep := map[string]struct{}{}
+	for id, stamp := range s.stamps {
+		if stamp.SessionScoped {
+			delete(s.stamps, id)
+			cleared++
+			continue
+		}
+		keep[stamp.Path] = struct{}{}
+	}
+	s.mu.Unlock()
+
+	sweepDir(filepath.Join(s.root, "pdfs"), nil)
+	sweepDir(filepath.Join(s.root, "jobs"), nil)
+	sweepDir(filepath.Join(s.root, "stamps"), keep)
+	if cleared > 0 {
+		log.Printf("previous session data cleared (%d records)", cleared)
+	}
+}
+
+// sweepDir 删除 dir 下不在 keep 集合（与 keep 中路径同构造方式）里的所有普通文件。
+func sweepDir(dir string, keep map[string]struct{}) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if _, ok := keep[path]; ok {
+			continue
+		}
+		_ = os.Remove(path)
+	}
 }
 
 func (s *Store) Root() string {
@@ -121,7 +175,6 @@ func (s *Store) SavePDF(header *multipart.FileHeader) (*PDFFile, error) {
 	}
 	s.mu.Lock()
 	s.pdfs[id] = file
-	s.saveManifestLocked()
 	s.mu.Unlock()
 	return file, nil
 }
@@ -147,7 +200,6 @@ func (s *Store) RegisterPDF(id, name, path string) (*PDFFile, error) {
 	}
 	s.mu.Lock()
 	s.pdfs[id] = file
-	s.saveManifestLocked()
 	s.mu.Unlock()
 	return file, nil
 }
@@ -158,7 +210,6 @@ func (s *Store) SetPDFPages(id string, pages []PageInfo) {
 	if file, ok := s.pdfs[id]; ok {
 		file.Pages = pages
 		file.PageCount = len(pages)
-		s.saveManifestLocked()
 	}
 }
 
@@ -170,7 +221,6 @@ func (s *Store) SetPDFPath(id, path string) {
 		if info, err := os.Stat(path); err == nil {
 			file.Size = info.Size()
 		}
-		s.saveManifestLocked()
 	}
 }
 
@@ -183,7 +233,6 @@ func (s *Store) RemovePDF(id string) {
 	file, ok := s.pdfs[id]
 	if ok {
 		delete(s.pdfs, id)
-		s.saveManifestLocked()
 	}
 	s.mu.Unlock()
 
@@ -212,44 +261,90 @@ func (s *Store) RemoveStamp(id string) {
 	}
 }
 
-func (s *Store) SaveStamp(header *multipart.FileHeader) (*StampAsset, error) {
+// SaveStamp 保存上传的印章。clientID 非空时使用浏览器端生成的稳定 id：
+// 同 id 已存在则幂等返回现有记录并认领（claim）为会话印章——这同时服务
+// 重水化、升级迁移与多标签页并发三种场景。
+func (s *Store) SaveStamp(header *multipart.FileHeader, clientID string) (*StampAsset, error) {
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
 		return nil, errors.New("only PNG and JPG stamp images are supported")
 	}
-	id := newID("stamp")
-	path := filepath.Join(s.root, "stamps", id+ext)
-	if err := saveUploadedFile(header, path); err != nil {
+	id := clientID
+	if id == "" {
+		id = newID("stamp")
+	} else if !stampIDPattern.MatchString(id) {
+		return nil, errors.New("invalid stamp id")
+	}
+	if existing := s.claimStamp(id); existing != nil {
+		return existing, nil
+	}
+	final := filepath.Join(s.root, "stamps", id+ext)
+	tmp := final + "." + newID("up") + ".tmp"
+	if err := saveUploadedFile(header, tmp); err != nil {
+		_ = os.Remove(tmp)
 		return nil, err
 	}
-	width, height, format, err := imageSize(path)
+	width, height, format, err := imageSize(tmp)
 	if err != nil {
-		_ = os.Remove(path)
+		_ = os.Remove(tmp)
 		return nil, err
 	}
 	if (ext == ".png" && format != "png") || ((ext == ".jpg" || ext == ".jpeg") && format != "jpeg") {
-		_ = os.Remove(path)
+		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("stamp file content does not match its extension")
 	}
 	if width <= 0 || height <= 0 || int64(width)*int64(height) > maxStampPixels {
-		_ = os.Remove(path)
+		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("stamp image dimensions are too large")
 	}
 	stamp := &StampAsset{
-		ID:        id,
-		Name:      filepath.Base(header.Filename),
-		Path:      path,
-		URL:       "/api/stamps/" + id + "/image",
-		Size:      header.Size,
-		WidthPx:   width,
-		HeightPx:  height,
-		CreatedAt: time.Now(),
+		ID:            id,
+		Name:          filepath.Base(header.Filename),
+		Path:          final,
+		URL:           "/api/stamps/" + id + "/image",
+		Size:          header.Size,
+		WidthPx:       width,
+		HeightPx:      height,
+		SessionScoped: true,
+		CreatedAt:     time.Now(),
 	}
 	s.mu.Lock()
+	if existing, ok := s.stamps[id]; ok {
+		// 并发上传同 id 的竞速失败方：认领现有记录，丢弃本次上传体。
+		existing.SessionScoped = true
+		s.saveManifestLocked()
+		copy := *existing
+		s.mu.Unlock()
+		_ = os.Remove(tmp)
+		return &copy, nil
+	}
+	_ = os.Remove(final) // Windows 上 rename 不能覆盖同名残留
+	if err := os.Rename(tmp, final); err != nil {
+		s.mu.Unlock()
+		_ = os.Remove(tmp)
+		return nil, err
+	}
 	s.stamps[id] = stamp
 	s.saveManifestLocked()
 	s.mu.Unlock()
-	return stamp, nil
+	copy := *stamp
+	return &copy, nil
+}
+
+// claimStamp 把已存在的印章标记为会话级（浏览器端已持久化），幂等。
+func (s *Store) claimStamp(id string) *StampAsset {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stamp, ok := s.stamps[id]
+	if !ok {
+		return nil
+	}
+	if !stamp.SessionScoped {
+		stamp.SessionScoped = true
+		s.saveManifestLocked()
+	}
+	copy := *stamp
+	return &copy
 }
 
 func (s *Store) PDF(id string) (*PDFFile, bool) {
@@ -312,7 +407,6 @@ func (s *Store) CreateJob(fileID string) *Job {
 	}
 	s.mu.Lock()
 	s.jobs[job.ID] = job
-	s.saveManifestLocked()
 	s.mu.Unlock()
 	return cloneJob(job)
 }
@@ -346,7 +440,6 @@ func (s *Store) UpdateJob(id string, update func(*Job)) {
 	if job, ok := s.jobs[id]; ok {
 		update(job)
 		job.UpdatedAt = time.Now()
-		s.saveManifestLocked()
 	}
 }
 
@@ -359,7 +452,6 @@ func (s *Store) RemoveJob(id string) {
 	job, ok := s.jobs[id]
 	if ok {
 		delete(s.jobs, id)
-		s.saveManifestLocked()
 	}
 	s.mu.Unlock()
 	if ok && job.ResultPath != "" {
@@ -440,19 +532,4 @@ func uniquePaths(paths []string) []string {
 		out = append(out, p)
 	}
 	return out
-}
-
-func cleanupStartupTemps(root string) {
-	for _, pattern := range []string{
-		filepath.Join(root, "jobs", "*.tmp"),
-		filepath.Join(root, "jobs", "*.plain.tmp"),
-		filepath.Join(root, "pdfs", "*.plain.tmp"),
-		filepath.Join(root, "pdfs", "*.img.*"),
-		filepath.Join(root, "pdfs", "*.rewrite.tmp.pdf"),
-	} {
-		matches, _ := filepath.Glob(pattern)
-		for _, match := range matches {
-			_ = os.Remove(match)
-		}
-	}
 }

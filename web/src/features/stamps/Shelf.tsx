@@ -156,7 +156,7 @@ function ImportTile({ compact }: { compact: boolean }) {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <ImagePlus size={18} />
+      <ImagePlus size={20} />
       <span className="text-[11px]">导入印章</span>
       <input
         type="file"

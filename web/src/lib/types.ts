@@ -20,6 +20,8 @@ export type StampAsset = {
   url: string
   widthPx: number
   heightPx: number
+  /** false = 旧版遗留在服务端、尚未迁入浏览器持久层认领的印章。 */
+  sessionScoped?: boolean
   createdAt: string
 }
 

@@ -382,7 +382,7 @@ func (s *Server) stamps(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	stamp, err := s.store.SaveStamp(header)
+	stamp, err := s.store.SaveStamp(header, strings.TrimSpace(r.FormValue("stampId")))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

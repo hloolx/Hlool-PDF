@@ -19,7 +19,8 @@ export function ToastHost() {
           key={toast.id}
           className={cx(
             'anim-rise pointer-events-auto flex items-center gap-2 rounded-xl border bg-panel px-3 py-2.5 text-[13px] shadow-pop',
-            toast.kind === 'error' ? 'border-accent/40' : 'border-line'
+            toast.kind === 'error' ? 'border-accent/40' : 'border-line',
+            toast.closing && 'anim-toast-out'
           )}
         >
           {icons[toast.kind]}

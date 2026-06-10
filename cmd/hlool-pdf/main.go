@@ -67,16 +67,18 @@ func main() {
 		log.Fatal("web mode requires HLOOL_AUTH_USER/HLOOL_AUTH_PASSWORD or HLOOL_TRUST_PROXY_AUTH=1")
 	}
 
-	store, err := storage.New(*dataDir)
-	if err != nil {
-		log.Fatal(err)
-	}
 	webFS := resolveWebFS(*webDir)
 	if webFS == nil {
 		log.Printf("web UI not found; serving API-only fallback")
 	}
 
 	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// 先抢端口再初始化存储：误开第二个实例时在这之前就退出，
+	// 启动清空不会误删正在运行实例的会话数据。
+	store, err := storage.New(*dataDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -131,13 +133,9 @@ func resolveWebFS(webDir string) fs.FS {
 	if dist, err := webui.Dist(); err == nil {
 		return dist
 	}
-	for _, dir := range []string{
-		filepath.Join("internal", "webui", "dist"),
-		filepath.Join("web", "dist"),
-	} {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			return os.DirFS(dir)
-		}
+	dir := filepath.Join("internal", "webui", "dist")
+	if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		return os.DirFS(dir)
 	}
 	return nil
 }

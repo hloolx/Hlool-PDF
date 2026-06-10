@@ -27,7 +27,8 @@ const iconSizeClass: Record<Size, string> = {
 }
 
 const baseClass =
-  'inline-flex min-w-0 select-none items-center justify-center overflow-hidden whitespace-nowrap font-medium transition-colors duration-150 ' +
+  'inline-flex min-w-0 select-none items-center justify-center overflow-hidden whitespace-nowrap font-medium transition duration-150 ' +
+  'active:scale-[0.97] ' +
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/60 ' +
   'disabled:pointer-events-none disabled:opacity-45'
 
