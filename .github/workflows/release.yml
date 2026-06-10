@@ -36,10 +36,9 @@ jobs:
 
       - name: Build embedded web UI
         run: |
-          npm --prefix web run build
           rm -rf internal/webui/dist
-          mkdir -p internal/webui/dist
-          cp -R web/dist/. internal/webui/dist/
+          npm --prefix web run build
+          test -f internal/webui/dist/index.html
 
       - name: Build platform packages
         shell: bash

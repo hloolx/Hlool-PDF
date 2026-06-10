@@ -16,7 +16,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=web /src/web/dist ./internal/webui/dist
+COPY --from=web /src/internal/webui/dist ./internal/webui/dist
 RUN CGO_ENABLED=0 go build -tags embed -trimpath -ldflags="-s -w" -o /out/hlool-pdf ./cmd/hlool-pdf
 
 FROM debian:bookworm-slim
