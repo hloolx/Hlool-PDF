@@ -1,0 +1,11 @@
+.git
+dist/
+web/node_modules/
+web/dist/
+internal/webui/dist/
+.hlool-data/
+.hlool-data-dev/
+.hlool-data*/
+.tmp*
+*.log
+*.exe~

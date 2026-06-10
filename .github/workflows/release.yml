@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Build embedded web UI
+        run: |
+          npm --prefix web run build
+          rm -rf internal/webui/dist
+          mkdir -p internal/webui/dist
+          cp -R web/dist/. internal/webui/dist/
+
+      - name: Build platform packages
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+
+          VERSION="$(cat VERSION)"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          mkdir -p dist/package dist/release
+
+          targets=(
+            "windows amd64 exe zip"
+            "windows arm64 exe zip"
+            "linux amd64 bin tar.gz"
+            "linux arm64 bin tar.gz"
+            "darwin amd64 bin tar.gz"
+            "darwin arm64 bin tar.gz"
+          )
+
+          for target in "${targets[@]}"; do
+            read -r goos goarch ext archive <<< "${target}"
+            package="hlool-pdf_${VERSION}_${goos}_${goarch}"
+            outdir="dist/package/${package}"
+            binary="hlool-pdf"
+
+            if [[ "${ext}" == "exe" ]]; then
+              binary="hlool-pdf.exe"
+            fi
+
+            mkdir -p "${outdir}"
+            GOOS="${goos}" GOARCH="${goarch}" go build -tags embed -trimpath -ldflags="-s -w" -o "${outdir}/${binary}" ./cmd/hlool-pdf
+            cp README.md VERSION "${outdir}/"
+
+            if [[ "${archive}" == "zip" ]]; then
+              (cd dist/package && zip -9 -r "../release/${package}.zip" "${package}")
+            else
+              tar -C dist/package -czf "dist/release/${package}.tar.gz" "${package}"
+            fi
+          done
+
+          (cd dist/release && sha256sum * > checksums.txt)
+
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES="Hlool PDF ${VERSION} multi-platform release with Windows, Linux, and macOS packages for amd64 and arm64."
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/release/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/release/* --title "Hlool PDF ${VERSION}" --notes "${NOTES}" --latest
+          fi

@@ -1,0 +1,9 @@
+.hlool-data/
+.hlool-data*/
+.tmp*
+dist/
+web/dist/
+internal/webui/dist/
+web/node_modules/
+*.log
+*.exe~
