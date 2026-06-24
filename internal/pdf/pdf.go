@@ -8,6 +8,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -100,10 +101,15 @@ func DecryptPDF(inputPath, outputPath, password string) error {
 	return api.DecryptFile(inputPath, outputPath, readConf(password))
 }
 
+// wmItem is one resolved watermark bound to a page, carrying its opacity so the
+// pipeline can batch watermarks that share an opacity into a single pass.
+type wmItem struct {
+	page    int
+	wm      *model.Watermark
+	opacity float64
+}
+
 func StampPDF(inputPath, outputPath string, pages []storage.PageInfo, options StampOptions, stamps map[string]StampAsset) error {
-	if len(options.Placements) == 0 && len(options.SeamSeals) == 0 {
-		return fmt.Errorf("at least one stamp or seam seal is required")
-	}
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return err
 	}
@@ -114,39 +120,44 @@ func StampPDF(inputPath, outputPath string, pages []storage.PageInfo, options St
 		defer os.Remove(workOutput)
 	}
 
-	current := inputPath
-	tmpFiles := make([]string, 0, len(options.Placements)+len(options.SeamSeals))
+	// Resolve every placement and seam-seal slice into one flat, ordered list of
+	// page-bound watermarks. Order is preserved (placements first, then seals) so
+	// the visual stacking matches the historical per-step pipeline.
+	var (
+		items    []wmItem
+		cleanups []func()
+	)
 	defer func() {
-		for _, p := range tmpFiles {
-			_ = os.Remove(p)
+		for _, c := range cleanups {
+			c()
 		}
 	}()
 
-	steps := len(options.Placements) + len(options.SeamSeals)
-	step := 0
-	nextPath := func() string {
-		step++
-		if step >= steps {
-			return workOutput
-		}
-		p := workOutput + fmt.Sprintf(".%02d.tmp", step)
-		tmpFiles = append(tmpFiles, p)
-		return p
-	}
-
 	for _, placement := range options.Placements {
-		next := nextPath()
-		if err := addPlacement(current, next, placement, stamps); err != nil {
+		wm, opacity, err := buildPlacementWatermark(placement, stamps)
+		if err != nil {
 			return err
 		}
-		current = next
+		items = append(items, wmItem{page: placement.PageNumber, wm: wm, opacity: opacity})
 	}
 	for _, seal := range options.SeamSeals {
-		next := nextPath()
-		if err := addSeamSeal(current, next, pages, seal, stamps); err != nil {
+		sealItems, cleanup, err := buildSeamWatermarks(pages, seal, stamps)
+		if cleanup != nil {
+			cleanups = append(cleanups, cleanup)
+		}
+		if err != nil {
 			return err
 		}
-		current = next
+		items = append(items, sealItems...)
+	}
+
+	if len(items) == 0 {
+		// 没有任何盖章步骤：把源 PDF 直通拷贝为产物（仍支持改名/加密）。
+		if err := copyFile(inputPath, workOutput); err != nil {
+			return err
+		}
+	} else if err := applyWatermarks(inputPath, workOutput, items); err != nil {
+		return err
 	}
 
 	if options.OutputPassword != "" {
@@ -163,43 +174,111 @@ func StampPDF(inputPath, outputPath string, pages []storage.PageInfo, options St
 	return nil
 }
 
-func addPlacement(inputPath, outputPath string, placement Placement, stamps map[string]StampAsset) error {
+// applyWatermarks stamps every watermark in items onto the PDF. pdfcpu's
+// slice-map applies a single shared opacity per pass, so items are split into
+// runs of equal (adjacent) opacity and each run is stamped in one read-write
+// pass. In the common case (everything fully opaque) that is exactly one pass
+// for the whole job, replacing the old one-pass-per-stamp pipeline.
+func applyWatermarks(inputPath, outputPath string, items []wmItem) error {
+	batches := batchByOpacity(items)
+	current := inputPath
+	tmpFiles := make([]string, 0, len(batches))
+	defer func() {
+		for _, p := range tmpFiles {
+			_ = os.Remove(p)
+		}
+	}()
+	for i, batch := range batches {
+		m := make(map[int][]*model.Watermark, len(batch))
+		for _, it := range batch {
+			m[it.page] = append(m[it.page], it.wm)
+		}
+		dest := outputPath
+		if i < len(batches)-1 {
+			dest = outputPath + fmt.Sprintf(".%02d.tmp", i)
+			tmpFiles = append(tmpFiles, dest)
+		}
+		if err := api.AddWatermarksSliceMapFile(current, dest, m, model.NewDefaultConfiguration()); err != nil {
+			return err
+		}
+		current = dest
+	}
+	return nil
+}
+
+// batchByOpacity groups consecutive items that share an opacity. Splitting only
+// on change (rather than gathering all equal opacities) preserves exact
+// front-to-back order, which matters when stamps of different opacity overlap.
+func batchByOpacity(items []wmItem) [][]wmItem {
+	var batches [][]wmItem
+	for _, it := range items {
+		if n := len(batches); n > 0 && batches[n-1][0].opacity == it.opacity {
+			batches[n-1] = append(batches[n-1], it)
+			continue
+		}
+		batches = append(batches, []wmItem{it})
+	}
+	return batches
+}
+
+// copyFile 原样复制文件内容（无章导出 / 直通的产物落盘）。
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// buildPlacementWatermark resolves one placement into a page-bound watermark.
+// It performs no PDF I/O — the watermark is applied later in a batched pass.
+func buildPlacementWatermark(placement Placement, stamps map[string]StampAsset) (*model.Watermark, float64, error) {
 	stamp, ok := stamps[placement.StampID]
 	if !ok {
-		return fmt.Errorf("stamp %q not found", placement.StampID)
+		return nil, 0, fmt.Errorf("stamp %q not found", placement.StampID)
 	}
 	if placement.PageNumber < 1 {
-		return fmt.Errorf("invalid page number %d", placement.PageNumber)
+		return nil, 0, fmt.Errorf("invalid page number %d", placement.PageNumber)
 	}
 	if placement.WidthPt <= 0 {
-		return fmt.Errorf("stamp width must be greater than zero")
+		return nil, 0, fmt.Errorf("stamp width must be greater than zero")
 	}
 	opacity := normalizedOpacity(placement.Opacity)
 	scale := placement.WidthPt / float64(stamp.WidthPx)
 	if scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
-		return fmt.Errorf("invalid stamp scale")
+		return nil, 0, fmt.Errorf("invalid stamp scale")
 	}
 	desc := watermarkDesc(placement.XPt, placement.YPt, scale, placement.Rotation, opacity)
 	wm, err := api.ImageWatermark(stamp.Path, desc, true, false, types.POINTS)
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
-	return api.AddWatermarksMapFile(inputPath, outputPath, map[int]*model.Watermark{
-		placement.PageNumber: wm,
-	}, model.NewDefaultConfiguration())
+	return wm, opacity, nil
 }
 
-func addSeamSeal(inputPath, outputPath string, pages []storage.PageInfo, seal SeamSeal, stamps map[string]StampAsset) error {
+// buildSeamWatermarks resolves one seam seal (骑缝章) into its per-page watermark
+// slices. It returns a cleanup that removes the temporary sliced-image files;
+// the caller must invoke it only after the watermarks have been applied.
+func buildSeamWatermarks(pages []storage.PageInfo, seal SeamSeal, stamps map[string]StampAsset) ([]wmItem, func(), error) {
 	stamp, ok := stamps[seal.StampID]
 	if !ok {
-		return fmt.Errorf("stamp %q not found", seal.StampID)
+		return nil, nil, fmt.Errorf("stamp %q not found", seal.StampID)
 	}
 	selected, err := selectedPages(seal.Pages, len(pages))
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if len(selected) < 2 {
-		return fmt.Errorf("seam seal needs at least two pages")
+		return nil, nil, fmt.Errorf("seam seal needs at least two pages")
 	}
 	maxSlices := seal.MaxSlices
 	if maxSlices <= 0 {
@@ -221,14 +300,13 @@ func addSeamSeal(inputPath, outputPath string, pages []storage.PageInfo, seal Se
 
 	pieces, cleanup, err := buildSeamPieces(stamp.Path, selected, maxSlices, seal.Side, seal.RandomSeed)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	defer cleanup()
 
-	wms := map[int]*model.Watermark{}
+	items := make([]wmItem, 0, len(selected))
 	for i, pageNo := range selected {
 		if pageNo < 1 || pageNo > len(pages) {
-			return fmt.Errorf("page %d is out of range", pageNo)
+			return nil, cleanup, fmt.Errorf("page %d is out of range", pageNo)
 		}
 		page := pages[pageNo-1]
 		piece := pieces[i]
@@ -236,11 +314,11 @@ func addSeamSeal(inputPath, outputPath string, pages []storage.PageInfo, seal Se
 		desc := watermarkDesc(x, y, scale, 0, opacity)
 		wm, err := api.ImageWatermark(piece.Path, desc, true, false, types.POINTS)
 		if err != nil {
-			return err
+			return nil, cleanup, err
 		}
-		wms[pageNo] = wm
+		items = append(items, wmItem{page: pageNo, wm: wm, opacity: opacity})
 	}
-	return api.AddWatermarksMapFile(inputPath, outputPath, wms, model.NewDefaultConfiguration())
+	return items, cleanup, nil
 }
 
 type seamPiece struct {

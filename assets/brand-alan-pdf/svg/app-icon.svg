@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">hlool pdf app icon</title>
+  <desc id="desc">Minimal Alan sheep mark optimized for small app icon use.</desc>
+  <rect width="128" height="128" rx="28" fill="#F8FBFF"/>
+  <circle cx="35" cy="91" r="13" fill="#C8372D" opacity=".88"/>
+  <path
+    d="M28 70c-12-8-11-27 2-34 6-4 13-4 19-1 5-13 18-20 32-17 9 2 17 8 21 16 10-1 19 6 22 16 3 12-4 24-16 28-3 18-20 31-42 31-23 0-41-13-45-32-1-3 1-6 7-7Z"
+    fill="#FFFFFF"
+    stroke="#071B4A"
+    stroke-width="6"
+    stroke-linejoin="round"
+  />
+  <path d="M42 65c0-13 10-21 29-21s29 8 29 21c0 17-11 27-29 27S42 82 42 65Z" fill="#071B4A"/>
+  <path d="M51 63c5 5 13 5 18 0M74 63c5 5 13 5 18 0" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"/>
+  <g transform="translate(78 15)">
+    <circle cx="24" cy="24" r="20" fill="#0B73FF" stroke="#071B4A" stroke-width="5"/>
+    <path d="M30 16c-12-8-26 4-18 16 6 10 21 6 20-5 0-6-8-10-13-5" fill="none" stroke="#071B4A" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <path d="M100 86l3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1 3-6Z" fill="#FFC72C" stroke="#071B4A" stroke-width="3" stroke-linejoin="round"/>
+</svg>

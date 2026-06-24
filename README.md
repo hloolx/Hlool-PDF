@@ -26,7 +26,7 @@ cd F:\code\pdf\hlool-pdf
 npm --prefix web install
 npm --prefix web run build
 
-go run .\cmd\hlool-pdf --mode desktop --addr 127.0.0.1:8088 --open
+go run .\cmd\hlool-pdf --addr 127.0.0.1:8088 --open
 ```
 
 Then open:

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">hlool pdf Alan sheep logo mark</title>
+  <desc id="desc">A white wool-cloud mascot with a dark sleepy face, cobalt spiral horn, yellow south star, and a restrained red seal accent.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#071B4A" flood-opacity=".14"/>
+    </filter>
+    <clipPath id="faceClip">
+      <path d="M76 132c0-24 18-39 52-39s52 15 52 39c0 29-20 47-52 47s-52-18-52-47Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="256" height="256" rx="56" fill="#F7FBFF"/>
+  <circle cx="73" cy="184" r="26" fill="#C8372D" opacity=".12"/>
+  <circle cx="73" cy="184" r="18" fill="none" stroke="#C8372D" stroke-width="5" opacity=".78"/>
+  <path d="M63 184h20M73 174v20" stroke="#C8372D" stroke-width="5" stroke-linecap="round" opacity=".78"/>
+
+  <g filter="url(#shadow)">
+    <path
+      d="M53 139c-19-11-23-42-3-58 8-7 19-9 29-7 7-24 31-39 56-34 16 3 29 14 36 28 17-3 36 7 43 23 9 19 1 41-17 51 1 5 0 10-1 15-6 29-34 49-68 49-37 0-67-20-75-50-2-6-2-12 0-17Z"
+      fill="#FFFFFF"
+      stroke="#071B4A"
+      stroke-width="8"
+      stroke-linejoin="round"
+    />
+    <path d="M68 88c9-12 26-17 41-11M159 72c15 1 27 10 34 23M54 137c9 4 19 4 30 1" fill="none" stroke="#DFF5FF" stroke-width="9" stroke-linecap="round"/>
+    <path d="M76 132c0-24 18-39 52-39s52 15 52 39c0 29-20 47-52 47s-52-18-52-47Z" fill="#071B4A"/>
+    <g clip-path="url(#faceClip)">
+      <path d="M93 129c9 9 23 9 32 0M132 129c9 9 23 9 32 0" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round"/>
+      <path d="M87 107c20 9 62 9 82 0" fill="none" stroke="#0A2A67" stroke-width="11" stroke-linecap="round" opacity=".72"/>
+    </g>
+  </g>
+
+  <g transform="translate(161 34)">
+    <circle cx="39" cy="39" r="34" fill="#0B73FF" stroke="#071B4A" stroke-width="7"/>
+    <path d="M49 25c-20-14-44 6-31 27 10 16 35 10 34-8-.1-11-13-16-21-9" fill="none" stroke="#071B4A" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="39" cy="39" r="8" fill="#9EEBFF" opacity=".8"/>
+  </g>
+
+  <path d="M199 177l6 12 13 2-10 9 3 13-12-7-12 7 3-13-10-9 13-2 6-12Z" fill="#FFC72C" stroke="#071B4A" stroke-width="5" stroke-linejoin="round"/>
+</svg>

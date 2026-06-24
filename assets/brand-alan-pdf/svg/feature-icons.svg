@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 180" role="img" aria-labelledby="title desc">
+  <title id="title">hlool pdf feature icon set</title>
+  <desc id="desc">Six product feature icons for stamping, seam seal, batch queue, page organizer, private output, and day-night theme.</desc>
+  <rect width="760" height="180" rx="24" fill="#F8FBFF"/>
+  <defs>
+    <style>
+      .card{fill:#fff;stroke:#DDE7F2;stroke-width:2}
+      .navy{stroke:#071B4A;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;fill:none}
+      .blue{stroke:#0B73FF;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;fill:none}
+      .red{stroke:#C8372D;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;fill:none}
+      .label{font:700 13px Inter,Segoe UI,Arial,sans-serif;fill:#071B4A}
+    </style>
+  </defs>
+  <g transform="translate(20 24)">
+    <rect class="card" width="100" height="100" rx="18"/>
+    <path class="navy" d="M36 24h34l12 12v45H36zM70 24v14h12"/>
+    <circle cx="55" cy="61" r="17" fill="#C8372D" opacity=".12"/>
+    <circle cx="55" cy="61" r="12" fill="none" stroke="#C8372D" stroke-width="4"/>
+    <text class="label" x="17" y="128">direct stamp</text>
+  </g>
+  <g transform="translate(145 24)">
+    <rect class="card" width="100" height="100" rx="18"/>
+    <path class="navy" d="M31 22h38l11 11v50H31zM69 22v12h11"/>
+    <path class="red" d="M80 31v52"/>
+    <path class="blue" d="M73 39h14M73 52h14M73 65h14"/>
+    <text class="label" x="24" y="128">seam slice</text>
+  </g>
+  <g transform="translate(270 24)">
+    <rect class="card" width="100" height="100" rx="18"/>
+    <path class="navy" d="M26 30h26v36H26zM48 42h26v36H48z"/>
+    <path class="red" d="M29 72c20 16 46 16 66 0"/>
+    <path class="blue" d="M78 31l11 11-11 11"/>
+    <text class="label" x="20" y="128">batch queue</text>
+  </g>
+  <g transform="translate(395 24)">
+    <rect class="card" width="100" height="100" rx="18"/>
+    <path class="navy" d="M23 31h24v30H23zM54 23h24v30H54zM50 66h28v30H50z"/>
+    <path class="blue" d="M36 76l-11 0 0-11M64 53l14 13"/>
+    <text class="label" x="8" y="128">page organize</text>
+  </g>
+  <g transform="translate(520 24)">
+    <rect class="card" width="100" height="100" rx="18"/>
+    <path class="navy" d="M31 47h38v34H31zM39 47V35c0-8 5-14 11-14s11 6 11 14v12"/>
+    <path class="red" d="M43 66h14"/>
+    <circle cx="50" cy="66" r="20" fill="#0B73FF" opacity=".08"/>
+    <text class="label" x="18" y="128">private file</text>
+  </g>
+  <g transform="translate(645 24)">
+    <rect class="card" width="100" height="100" rx="18"/>
+    <path class="blue" d="M31 52a21 21 0 0 0 34 17 23 23 0 0 1-16-38 21 21 0 0 0-18 21Z"/>
+    <path class="red" d="M72 31v8M72 65v8M51 52h8M85 52h8M58 38l6 6M80 60l6 6M58 66l6-6M80 44l6-6"/>
+    <text class="label" x="23" y="128">day night</text>
+  </g>
+</svg>

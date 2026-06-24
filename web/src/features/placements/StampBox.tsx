@@ -4,17 +4,8 @@ import type { Guide, RectPt } from '../../lib/geometry'
 import { snapRect } from '../../lib/geometry'
 import { clamp, type PageInfo, type Placement, type StampAsset } from '../../lib/types'
 import { fmtMm, mmToPt } from '../../lib/units'
-import { parsePageExpression } from '../../lib/pages'
 import { cx } from '../../lib/cx'
-import { activeFile, useEditorStore } from '../../state/store'
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger
-} from '../../ui/ContextMenu'
-import { applyPlacementToPages, centerPlacement, duplicatePlacement } from './actions'
+import { useEditorStore } from '../../state/store'
 
 type DragState =
   | { kind: 'move'; startX: number; startY: number; xPt: number; yPt: number }
@@ -51,7 +42,6 @@ export const StampBox = memo(function StampBox({
   const drag = useRef<DragState | null>(null)
   const [label, setLabel] = useState<string | null>(null)
   const update = useEditorStore((state) => state.updatePlacement)
-  const remove = useEditorStore((state) => state.removePlacement)
   const select = useEditorStore((state) => state.select)
   const clearLastAdded = useEditorStore((state) => state.clearLastAdded)
 
@@ -158,90 +148,70 @@ export const StampBox = memo(function StampBox({
     onGuides(null)
   }
 
-  const file = useEditorStore(activeFile)
-  const rangeText = useEditorStore((state) => state.rangeText)
-  const rangePages = file ? parsePageExpression(rangeText, file.pageCount).pages : []
-  const allPages = file ? file.pages.map((p) => p.pageNumber) : []
-
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={rootRef}
-          className={cx(
-            'absolute touch-none select-none',
-            selected
-              ? 'z-10 cursor-grab active:cursor-grabbing'
-              : 'cursor-pointer hover:outline-dashed hover:outline-1 hover:outline-accent/60',
-            justAdded && 'anim-stamp-press'
-          )}
-          style={{
-            left,
-            top,
-            width,
-            height,
-            opacity: placement.opacity,
-            transform: `rotate(${placement.rotation}deg)`,
-            boxShadow: selected ? '0 0 0 1.5px var(--c-accent)' : undefined
-          }}
-          onPointerDown={beginMove}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-          onContextMenu={() => select({ kind: 'placement', id: placement.id })}
-          onAnimationEnd={() => justAdded && clearLastAdded()}
-        >
-          <img src={stamp.url} alt="" draggable={false} className="pointer-events-none h-full w-full" />
-          {selected && (
-            <>
-              {HANDLES.map((handle) => (
-                <span
-                  key={handle.key}
-                  className={cx(
-                    'absolute size-2.5 rounded-full border-[1.5px] border-accent bg-panel shadow-sm transition-transform hover:scale-125',
-                    handle.className
-                  )}
-                  onPointerDown={beginResize}
-                />
-              ))}
-              {/* 旋转手柄放在印章下方，避免被上方浮动工具条遮挡 */}
-              <span
-                className="absolute bottom-[-22px] left-1/2 h-[16px] w-px -translate-x-1/2 bg-accent/70"
-                aria-hidden
-              />
-              <span
-                className="absolute bottom-[-42px] left-1/2 flex size-5 -translate-x-1/2 cursor-grab items-center justify-center rounded-full border-[1.5px] border-accent bg-panel shadow-sm transition-transform hover:scale-110 active:cursor-grabbing"
-                title="拖动旋转，按住 Shift 吸附 15°"
-                onPointerDown={beginRotate}
-              >
-                <RotateCw size={13} className="pointer-events-none text-accent" />
-              </span>
-              {label && (
-                <span
-                  className="tnum pointer-events-none absolute -top-7 left-full ml-1 whitespace-nowrap rounded bg-ink px-1.5 py-0.5 text-xs text-panel"
-                  style={{ transform: `rotate(${-placement.rotation}deg)` }}
-                >
-                  {label}
-                </span>
+    <div
+      ref={rootRef}
+      data-placement-id={placement.id}
+      className={cx(
+        'absolute touch-none select-none',
+        selected
+          ? 'z-10 cursor-grab active:cursor-grabbing'
+          : 'cursor-pointer hover:outline-dashed hover:outline-1 hover:outline-accent/60',
+        justAdded && 'anim-stamp-press'
+      )}
+      style={{
+        left,
+        top,
+        width,
+        height,
+        opacity: placement.opacity,
+        transform: `rotate(${placement.rotation}deg)`,
+        boxShadow: selected ? '0 0 0 1.5px var(--c-accent)' : undefined
+      }}
+      onPointerDown={beginMove}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onContextMenu={() => select({ kind: 'placement', id: placement.id })}
+      onAnimationEnd={() => justAdded && clearLastAdded()}
+    >
+      <img src={stamp.url} alt="" draggable={false} className="pointer-events-none h-full w-full" />
+      {selected && (
+        <>
+          {HANDLES.map((handle) => (
+            <span
+              key={handle.key}
+              aria-hidden
+              className={cx(
+                'absolute size-2.5 rounded-full border-[1.5px] border-accent bg-panel shadow-sm transition-transform hover:scale-125',
+                handle.className
               )}
-            </>
+              onPointerDown={beginResize}
+            />
+          ))}
+          {/* 旋转手柄放在印章下方，避免被上方浮动工具条遮挡 */}
+          <span
+            className="absolute bottom-[-22px] left-1/2 h-[16px] w-px -translate-x-1/2 bg-accent/70"
+            aria-hidden
+          />
+          <span
+            aria-hidden
+            className="absolute bottom-[-42px] left-1/2 flex size-5 -translate-x-1/2 cursor-grab items-center justify-center rounded-full border-[1.5px] border-accent bg-panel shadow-sm transition-transform hover:scale-110 active:cursor-grabbing"
+            title="拖动旋转，按住 Shift 吸附 15°（也可用 [ ] 键）"
+            onPointerDown={beginRotate}
+          >
+            <RotateCw size={13} className="pointer-events-none text-accent" />
+          </span>
+          {label && (
+            <span
+              className="tnum pointer-events-none absolute -top-7 left-full ml-1 whitespace-nowrap rounded bg-ink px-1.5 py-0.5 text-xs text-panel"
+              style={{ transform: `rotate(${-placement.rotation}deg)` }}
+            >
+              {label}
+            </span>
           )}
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={() => applyPlacementToPages(placement, allPages)}>应用到全部页</ContextMenuItem>
-        <ContextMenuItem disabled={rangePages.length === 0} onSelect={() => applyPlacementToPages(placement, rangePages)}>
-          应用到所选范围
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => centerPlacement(placement)}>页面居中</ContextMenuItem>
-        <ContextMenuItem onSelect={() => duplicatePlacement(placement)}>
-          复制 <span className="ml-auto text-xs text-ink-muted">Ctrl+D</span>
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem className="text-accent" onSelect={() => remove(placement.id)}>
-          删除 <span className="ml-auto text-xs text-ink-muted">Del</span>
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+        </>
+      )}
+    </div>
   )
 })

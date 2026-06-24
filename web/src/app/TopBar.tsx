@@ -3,15 +3,21 @@ import {
   ChevronDown,
   FileText,
   FileUp,
-  History,
+  Keyboard,
   Layers,
   Loader2,
+  LogOut,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRight,
   Play,
   Redo2,
   Sun,
   Trash2,
-  Undo2
+  Undo2,
+  UserPlus,
+  UserRound
 } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { cx } from '../lib/cx'
@@ -20,7 +26,9 @@ import {
   activeFile,
   configuredFiles,
   hasConfig,
+  leftPanelOpen,
   redo,
+  rightPanelOpen,
   switchFile,
   undo,
   useEditorStore,
@@ -29,10 +37,13 @@ import {
 import { Button, ConfirmButton, IconButton } from '../ui/Button'
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from '../ui/Menu'
 import { Tip } from '../ui/Tooltip'
-import { generateAll, generateCurrent, generationStatus, outputNameFor } from '../features/jobs/actions'
-import { useJobsUi } from '../features/jobs/jobsUi'
+import { generateAll, generateCurrent, generationStatus, outputNameFor } from '../features/generate/actions'
 import { toggleTheme } from '../features/theme/ThemeFx'
 import { applyConfigToAllFiles, deleteFileAction, importPicked } from '../features/workspace/actions'
+import { logout } from '../features/auth/api'
+import { useAuth } from '../features/auth/useAuth'
+import { resetSettingsSync } from '../features/library/settings'
+import { useShortcutHelp } from '../features/help/ShortcutHelp'
 
 function TopBarDivider() {
   return <span className="mx-1.5 h-5 w-px shrink-0 bg-line" aria-hidden />
@@ -41,14 +52,7 @@ function TopBarDivider() {
 export function TopBar() {
   return (
     <header className="flex h-[52px] shrink-0 items-center gap-1.5 border-b border-line bg-panel px-3">
-      <div className="flex items-center gap-2 pr-2">
-        {/* 印章式 logo：双线印框 + 微倾斜 + 启动时盖章入场 */}
-        <span className="anim-stamp-press relative flex size-7 -rotate-3 items-center justify-center rounded-lg bg-accent text-xs font-bold text-white shadow-sm">
-          印
-          <span className="pointer-events-none absolute inset-[2.5px] rounded-md border border-white/40" aria-hidden />
-        </span>
-        <span className="text-[13px] font-semibold tracking-wide">hlool pdf</span>
-      </div>
+      <BrandLeftPanelToggle />
       <FileMenu />
       <BusyChip />
       <div className="flex-1" />
@@ -56,15 +60,66 @@ export function TopBar() {
       <TopBarDivider />
       <ZoomMenu />
       <TopBarDivider />
+      <HelpButton />
       <ThemeToggle />
-      <Tip label="任务历史">
-        <IconButton onClick={() => useJobsUi.getState().setHistoryOpen(true)} aria-label="任务历史">
-          <History size={20} />
-        </IconButton>
-      </Tip>
+      <UserMenu />
+      <RightPanelToggle />
       <TopBarDivider />
       <GenerateSplitButton />
     </header>
+  )
+}
+
+function BrandLeftPanelToggle() {
+  const open = useEditorStore(leftPanelOpen)
+  const toggle = useEditorStore((state) => state.toggleLeftPanel)
+  const Icon = open ? PanelLeftClose : PanelLeftOpen
+  const label = open ? '收起缩略图与印章架' : '拉出缩略图与印章架'
+
+  return (
+    <Tip label={label}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={open}
+        className="group flex h-10 shrink-0 items-center gap-2 rounded-lg pl-1 pr-2 text-left transition duration-150 hover:bg-sunken active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/60"
+        onClick={() => toggle()}
+      >
+        <span className="anim-stamp-press relative flex size-7 -rotate-3 items-center justify-center overflow-hidden rounded-lg bg-accent text-xs font-bold text-white shadow-sm">
+          <span className="transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0">印</span>
+          <Icon
+            size={18}
+            className="absolute opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+            aria-hidden
+          />
+          <span className="pointer-events-none absolute inset-[2.5px] rounded-md border border-white/40" aria-hidden />
+        </span>
+        <span className="hidden text-[13px] font-semibold tracking-wide sm:inline">hlool pdf</span>
+      </button>
+    </Tip>
+  )
+}
+
+function RightPanelToggle() {
+  const open = useEditorStore(rightPanelOpen)
+  const toggle = useEditorStore((state) => state.toggleRightPanel)
+  return (
+    <Tip label={open ? '隐藏属性检查器' : '显示属性检查器'}>
+      <IconButton aria-label="切换右侧面板" aria-pressed={open} onClick={() => toggle()}>
+        <PanelRight size={20} className={cx(!open && 'text-ink-muted')} />
+      </IconButton>
+    </Tip>
+  )
+}
+
+function HelpButton() {
+  const toggle = useShortcutHelp((state) => state.toggle)
+  return (
+    <Tip label="键盘快捷键 (?)">
+      <IconButton aria-label="键盘快捷键" onClick={toggle}>
+        <Keyboard size={20} />
+      </IconButton>
+    </Tip>
   )
 }
 
@@ -121,9 +176,9 @@ function FileMenu() {
                 <span className="tnum shrink-0 text-xs text-ink-muted">{item.pageCount} 页</span>
                 <ConfirmButton
                   size="sm"
-                  confirmLabel="再点一次删除"
-                  title="删除文件"
-                  onConfirm={() => void deleteFileAction(item)}
+                  confirmLabel="再点一次移除"
+                  title="移除文件"
+                  onConfirm={() => deleteFileAction(item)}
                 >
                   <Trash2 size={16} />
                 </ConfirmButton>
@@ -209,6 +264,58 @@ function ThemeToggle() {
   )
 }
 
+async function signOut() {
+  try {
+    await logout()
+  } catch {
+    /* 即便请求失败也按本地登出处理 */
+  }
+  resetSettingsSync()
+  useEditorStore.getState().resetWorkspace()
+  useAuth.getState().setAnon()
+}
+
+function UserMenu() {
+  const user = useAuth((state) => state.user)
+  const setPromptLogin = useAuth((state) => state.setPromptLogin)
+  const isGuest = user?.isGuest ?? false
+  return (
+    <Menu>
+      <MenuTrigger asChild>
+        <IconButton aria-label="账户">
+          <span className="relative inline-flex">
+            <UserRound size={20} className={cx(isGuest && 'text-ink-muted')} />
+            {isGuest && (
+              <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-accent ring-2 ring-panel" aria-hidden />
+            )}
+          </span>
+        </IconButton>
+      </MenuTrigger>
+      <MenuContent className="min-w-52">
+        {isGuest ? (
+          <>
+            <MenuLabel>临时身份 · 约 24 小时后清除</MenuLabel>
+            <MenuSeparator />
+            <MenuItem onSelect={() => setPromptLogin(true)}>
+              <UserPlus size={16} />
+              注册 / 登录以长期保存
+            </MenuItem>
+          </>
+        ) : (
+          <>
+            <MenuLabel>{user?.username || '已登录'}</MenuLabel>
+            <MenuSeparator />
+            <MenuItem onSelect={() => void signOut()}>
+              <LogOut size={16} />
+              退出登录
+            </MenuItem>
+          </>
+        )}
+      </MenuContent>
+    </Menu>
+  )
+}
+
 function GenerateSplitButton() {
   const status = useEditorStore(useShallow((state) => generationStatus(state)))
   const summary = useEditorStore(
@@ -225,9 +332,7 @@ function GenerateSplitButton() {
       }
     })
   )
-  const anyActive = useEditorStore((state) =>
-    state.jobs.some((job) => job.status === 'queued' || job.status === 'running')
-  )
+  const generating = useEditorStore((state) => state.busy.startsWith('正在生成'))
 
   return (
     <div className="flex">
@@ -235,10 +340,10 @@ function GenerateSplitButton() {
         <Button
           variant="primary"
           className={cx('rounded-r-none', !status.ok && 'opacity-55')}
-          aria-disabled={!status.ok}
+          disabled={generating}
           onClick={() => void generateCurrent()}
         >
-          {anyActive ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+          {generating ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
           生成
         </Button>
       </Tip>

@@ -13,7 +13,7 @@ export function ToastHost() {
   const dismiss = useToasts((state) => state.dismiss)
   if (toasts.length === 0) return null
   return (
-    <div className="pointer-events-none flex w-80 flex-col items-stretch gap-2">
+    <div role="status" aria-live="polite" className="pointer-events-none flex w-80 flex-col items-stretch gap-2">
       {toasts.map((toast) => (
         <div
           key={toast.id}

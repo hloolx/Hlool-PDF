@@ -6,7 +6,7 @@ import {
   clamp,
   emptyConfig,
   type FileConfig,
-  type Job,
+  type LibrarySettings,
   type PDFFile,
   type Placement,
   type SeamConfig,
@@ -22,55 +22,82 @@ export const MIN_ZOOM = 0.25
 export const MAX_ZOOM = 3
 export const MAX_PLACEMENTS_PER_JOB = 1000
 
+// 侧栏停靠断点：窗口宽于此值时面板并排停靠，窄于时改为浮层抽屉。
+export const LEFT_DOCK_BP = 820
+export const RIGHT_DOCK_BP = 1024
+
+// Device-local cache (instant boot). The library subset also syncs to the
+// server (/api/settings) so it follows the account across devices.
 type PersistedState = {
-  configs: Record<string, FileConfig>
   theme: 'light' | 'dark'
   zoomPreset: ZoomPreset
   zoom: number
   stampDefaults: StampDefaults
   stampMeta: Record<string, StampMeta>
   outputNameTemplate: string
+  /** 左侧（缩略图/印章架）面板是否展开。设备本地偏好，不同步服务端。 */
+  leftOpen: boolean
+  /** 右侧检查器面板是否展开。 */
+  rightOpen: boolean
 }
 
 export type EditorState = PersistedState & {
+  // configs are per-file (client fileId) and live only in memory, since PDFs
+  // are transient browser-held bytes.
+  configs: Record<string, FileConfig>
   files: PDFFile[]
   stamps: StampAsset[]
-  jobs: Job[]
-  /** 文件内容版本号：原地并入/撤销后递增，用于绕过 pdf.js 与 HTTP 缓存。 */
+  /** 文件内容版本号：合并/重排（replaceFile）后递增，用于让缩略图拖拽顺序失效。 */
   fileRevs: Record<string, number>
   activeFileId: string | null
   currentPage: number
   selection: Selection
+  selectedStampIds: string[]
+  selectedPageNumbers: number[]
   armedStampId: string | null
   lastStampId: string | null
   rangeText: string
   lastAddedId: string | null
   outputPassword: string
   busy: string
+  /** 服务端设置文档版本号（乐观并发）。 */
+  settingsVersion: number
+  /** 当前视口宽度，用于窄屏判定（瞬时态，不持久化）。 */
+  viewportWidth: number
+  /** 窄屏浮层抽屉当前打开的一侧（一次只开一个）。 */
+  mobilePanel: 'left' | 'right' | null
 
   setBusy: (busy: string) => void
-  setWorkspace: (files: PDFFile[], stamps: StampAsset[], jobs: Job[]) => void
+  setWorkspace: (files: PDFFile[], stamps: StampAsset[]) => void
+  setStamps: (stamps: StampAsset[]) => void
+  hydrateSettings: (settings: LibrarySettings, version: number) => void
+  setSettingsVersion: (version: number) => void
+  resetWorkspace: () => void
   upsertFiles: (files: PDFFile[]) => void
-  /** 原位替换文件条目（fileId 不变，列表顺序保持），并递增内容版本号。 */
+  /** 原位替换文件条目（fileId 不变，列表顺序保持）。 */
   replaceFile: (file: PDFFile) => void
   removeFile: (fileId: string) => void
   upsertStamps: (stamps: StampAsset[]) => void
   removeStamp: (stampId: string) => void
-  setJobs: (jobs: Job[]) => void
-  upsertJob: (job: Job) => void
-  removeJob: (jobId: string) => void
+  removeStamps: (stampIds: string[]) => void
   _activateFile: (fileId: string | null) => void
   setCurrentPage: (page: number) => void
   setZoom: (zoom: number, preset: ZoomPreset) => void
   setTheme: (theme: 'light' | 'dark') => void
   setStampDefaults: (patch: Partial<StampDefaults>) => void
   setStampMeta: (stampId: string, patch: StampMeta) => void
-  /** 清理不再存在的印章的别名等元数据（boot 重水化后按 id 并集调用）。 */
   pruneStampMeta: (keepIds: string[]) => void
   setRangeText: (text: string) => void
   setOutputNameTemplate: (template: string) => void
   setOutputPassword: (password: string) => void
+  toggleLeftPanel: (open?: boolean) => void
+  toggleRightPanel: (open?: boolean) => void
+  setViewportWidth: (width: number) => void
+  closeMobilePanel: () => void
   select: (selection: Selection) => void
+  setSelectedStampIds: (stampIds: string[]) => void
+  setSelectedPageNumbers: (pageNumbers: number[]) => void
+  clearBulkSelection: () => void
   arm: (stampId: string | null) => void
   clearLastAdded: () => void
   addPlacements: (placements: Placement[], options?: { select?: boolean }) => void
@@ -81,24 +108,15 @@ export type EditorState = PersistedState & {
   setSeam: (patch: Partial<SeamConfig>) => void
   setSeamEnabled: (enabled: boolean) => void
   setConfig: (fileId: string, config: FileConfig) => void
-  /** 用新印章替换旧印章的所有引用（撤销白底处理时使用）。 */
   swapStamp: (oldId: string, newId: string) => void
 }
 
-const PERSIST_KEY = 'hlool-pdf:workspace-v2'
+const PERSIST_KEY = 'hlool-pdf:prefs-v3'
 
 function readPersisted(): Partial<PersistedState> {
   try {
     const raw = window.localStorage.getItem(PERSIST_KEY)
-    const parsed = raw ? (JSON.parse(raw) as Partial<PersistedState>) : {}
-    // 旧版本持久化的 seam 可能缺少新增字段（如 randomSeed），统一补默认值。
-    if (parsed.configs) {
-      for (const config of Object.values(parsed.configs)) {
-        config.seam = { ...DEFAULT_SEAM, ...config.seam }
-        config.placements = config.placements ?? []
-      }
-    }
-    return parsed
+    return raw ? (JSON.parse(raw) as Partial<PersistedState>) : {}
   } catch {
     return {}
   }
@@ -116,7 +134,6 @@ const persisted = readPersisted()
 export const useEditorStore = create<EditorState>()(
   temporal(
     (set, get) => ({
-      configs: persisted.configs ?? {},
       theme: persisted.theme === 'dark' ? 'dark' : 'light',
       zoomPreset: persisted.zoomPreset ?? 'fit',
       zoom: clamp(Number(persisted.zoom) || 1, MIN_ZOOM, MAX_ZOOM),
@@ -127,29 +144,70 @@ export const useEditorStore = create<EditorState>()(
       },
       stampMeta: persisted.stampMeta ?? {},
       outputNameTemplate: persisted.outputNameTemplate || '{原名}-已盖章',
+      leftOpen: persisted.leftOpen ?? true,
+      rightOpen: persisted.rightOpen ?? true,
 
+      configs: {},
       files: [],
       stamps: [],
-      jobs: [],
       fileRevs: {},
       activeFileId: null,
       currentPage: 1,
       selection: null,
+      selectedStampIds: [],
+      selectedPageNumbers: [],
       armedStampId: null,
       lastStampId: null,
       rangeText: '全部',
       lastAddedId: null,
       outputPassword: '',
       busy: '',
+      settingsVersion: 0,
+      viewportWidth: typeof window === 'undefined' ? 1280 : window.innerWidth,
+      mobilePanel: null,
 
       setBusy: (busy) => set({ busy }),
 
-      setWorkspace: (files, stamps, jobs) =>
+      setWorkspace: (files, stamps) =>
         set((state) => {
           const ids = new Set(files.map((f) => f.fileId))
           const configs = Object.fromEntries(Object.entries(state.configs).filter(([id]) => ids.has(id)))
           const activeFileId = state.activeFileId && ids.has(state.activeFileId) ? state.activeFileId : (files[0]?.fileId ?? null)
-          return { files, stamps, jobs, configs, activeFileId }
+          return { files, stamps, configs, activeFileId }
+        }),
+
+      setStamps: (stamps) => set({ stamps }),
+
+      hydrateSettings: (settings, version) =>
+        set((state) => ({
+          settingsVersion: version,
+          stampDefaults: settings.stampDefaults
+            ? {
+                sizeMm: clamp(Number(settings.stampDefaults.sizeMm) || state.stampDefaults.sizeMm, 5, 120),
+                opacity: clamp(Number(settings.stampDefaults.opacity) || state.stampDefaults.opacity, 0.1, 1),
+                rotation: clamp(Number(settings.stampDefaults.rotation) || 0, -180, 180)
+              }
+            : state.stampDefaults,
+          stampMeta: settings.stampMeta ?? state.stampMeta,
+          outputNameTemplate: settings.outputNameTemplate || state.outputNameTemplate
+        })),
+
+      setSettingsVersion: (settingsVersion) => set({ settingsVersion }),
+
+      resetWorkspace: () =>
+        set({
+          files: [],
+          stamps: [],
+          configs: {},
+          fileRevs: {},
+          activeFileId: null,
+          currentPage: 1,
+          selection: null,
+          selectedStampIds: [],
+          selectedPageNumbers: [],
+          armedStampId: null,
+          lastStampId: null,
+          settingsVersion: 0
         }),
 
       upsertFiles: (incoming) =>
@@ -176,6 +234,7 @@ export const useEditorStore = create<EditorState>()(
             configs,
             activeFileId,
             selection: state.activeFileId === fileId ? null : state.selection,
+            selectedPageNumbers: state.activeFileId === fileId ? [] : state.selectedPageNumbers,
             currentPage: state.activeFileId === fileId ? 1 : state.currentPage
           }
         }),
@@ -206,20 +265,45 @@ export const useEditorStore = create<EditorState>()(
             stampMeta,
             armedStampId: state.armedStampId === stampId ? null : state.armedStampId,
             lastStampId: state.lastStampId === stampId ? null : state.lastStampId,
+            selectedStampIds: state.selectedStampIds.filter((id) => id !== stampId),
             selection: null
           }
         }),
 
-      setJobs: (jobs) => set({ jobs }),
-      upsertJob: (job) =>
-        set((state) => ({ jobs: [job, ...state.jobs.filter((j) => j.jobId !== job.jobId)].slice(0, 50) })),
-      removeJob: (jobId) => set((state) => ({ jobs: state.jobs.filter((j) => j.jobId !== jobId) })),
+      removeStamps: (stampIds) =>
+        set((state) => {
+          const remove = new Set(stampIds)
+          if (remove.size === 0) return {}
+          const configs: Record<string, FileConfig> = {}
+          for (const [fileId, config] of Object.entries(state.configs)) {
+            const placements = config.placements.filter((p) => !remove.has(p.stampId))
+            const seamUsesStamp = config.seam.stampId ? remove.has(config.seam.stampId) : false
+            configs[fileId] = {
+              placements,
+              seamEnabled: seamUsesStamp ? false : config.seamEnabled,
+              seam: seamUsesStamp ? { ...config.seam, stampId: null } : config.seam
+            }
+          }
+          const stampMeta = { ...state.stampMeta }
+          for (const id of remove) delete stampMeta[id]
+          return {
+            stamps: state.stamps.filter((s) => !remove.has(s.stampId)),
+            configs,
+            stampMeta,
+            armedStampId: state.armedStampId && remove.has(state.armedStampId) ? null : state.armedStampId,
+            lastStampId: state.lastStampId && remove.has(state.lastStampId) ? null : state.lastStampId,
+            selectedStampIds: [],
+            selection: null
+          }
+        }),
 
       _activateFile: (fileId) =>
         set({
           activeFileId: fileId,
           currentPage: 1,
           selection: null,
+          selectedStampIds: [],
+          selectedPageNumbers: [],
           armedStampId: null,
           lastAddedId: null,
           rangeText: '全部'
@@ -241,7 +325,32 @@ export const useEditorStore = create<EditorState>()(
       setRangeText: (rangeText) => set({ rangeText }),
       setOutputNameTemplate: (outputNameTemplate) => set({ outputNameTemplate }),
       setOutputPassword: (outputPassword) => set({ outputPassword }),
+      toggleLeftPanel: (open) =>
+        set((state) => {
+          // 宽屏：切换停靠列；窄屏：切换浮层抽屉（开左自动收右）。
+          if (state.viewportWidth >= LEFT_DOCK_BP) return { leftOpen: open ?? !state.leftOpen }
+          const wantOpen = open ?? state.mobilePanel !== 'left'
+          return { mobilePanel: wantOpen ? 'left' : null }
+        }),
+      toggleRightPanel: (open) =>
+        set((state) => {
+          if (state.viewportWidth >= RIGHT_DOCK_BP) return { rightOpen: open ?? !state.rightOpen }
+          const wantOpen = open ?? state.mobilePanel !== 'right'
+          return { mobilePanel: wantOpen ? 'right' : null }
+        }),
+      setViewportWidth: (viewportWidth) =>
+        set((state) => {
+          const patch: Partial<EditorState> = { viewportWidth }
+          // 某侧重新停靠后，清掉它残留的浮层状态。
+          if (state.mobilePanel === 'left' && viewportWidth >= LEFT_DOCK_BP) patch.mobilePanel = null
+          else if (state.mobilePanel === 'right' && viewportWidth >= RIGHT_DOCK_BP) patch.mobilePanel = null
+          return patch
+        }),
+      closeMobilePanel: () => set({ mobilePanel: null }),
       select: (selection) => set({ selection }),
+      setSelectedStampIds: (selectedStampIds) => set({ selectedStampIds, selectedPageNumbers: [] }),
+      setSelectedPageNumbers: (selectedPageNumbers) => set({ selectedPageNumbers, selectedStampIds: [] }),
+      clearBulkSelection: () => set({ selectedStampIds: [], selectedPageNumbers: [] }),
       arm: (armedStampId) => set({ armedStampId, lastStampId: armedStampId ?? get().lastStampId, selection: armedStampId ? null : get().selection }),
       clearLastAdded: () => set({ lastAddedId: null }),
 
@@ -351,19 +460,20 @@ export const useEditorStore = create<EditorState>()(
   )
 )
 
-/* ---- 持久化（localStorage 镜像，防抖写入） ---- */
+/* ---- 设备本地偏好（localStorage 镜像，防抖写入） ---- */
 let persistTimer: number | undefined
 useEditorStore.subscribe((state) => {
   window.clearTimeout(persistTimer)
   persistTimer = window.setTimeout(() => {
     const payload: PersistedState = {
-      configs: state.configs,
       theme: state.theme,
       zoomPreset: state.zoomPreset,
       zoom: state.zoom,
       stampDefaults: state.stampDefaults,
       stampMeta: state.stampMeta,
-      outputNameTemplate: state.outputNameTemplate
+      outputNameTemplate: state.outputNameTemplate,
+      leftOpen: state.leftOpen,
+      rightOpen: state.rightOpen
     }
     try {
       window.localStorage.setItem(PERSIST_KEY, JSON.stringify(payload))
@@ -397,12 +507,6 @@ export function activeFile(state: EditorState): PDFFile | null {
   return state.files.find((f) => f.fileId === state.activeFileId) ?? null
 }
 
-/** 文件内容 URL（带版本号，原地并入后自动失效旧缓存）。 */
-export function fileContentSrc(state: EditorState, fileId: string): string {
-  const rev = state.fileRevs[fileId] ?? 0
-  return `/api/files/${fileId}/content${rev > 0 ? `?v=${rev}` : ''}`
-}
-
 const EMPTY_CONFIG = emptyConfig()
 
 export function activeConfig(state: EditorState): FileConfig {
@@ -434,6 +538,33 @@ export function configuredFiles(state: EditorState): PDFFile[] {
   return state.files.filter((f) => hasConfig(state.configs[f.fileId]))
 }
 
+/* ---- 侧栏停靠 / 浮层判定 ---- */
+export function leftDocked(state: EditorState): boolean {
+  return state.viewportWidth >= LEFT_DOCK_BP
+}
+
+export function rightDocked(state: EditorState): boolean {
+  return state.viewportWidth >= RIGHT_DOCK_BP
+}
+
+/** 左栏当前是否可见：宽屏看停靠偏好，窄屏看浮层抽屉。 */
+export function leftPanelOpen(state: EditorState): boolean {
+  return state.viewportWidth >= LEFT_DOCK_BP ? state.leftOpen : state.mobilePanel === 'left'
+}
+
+export function rightPanelOpen(state: EditorState): boolean {
+  return state.viewportWidth >= RIGHT_DOCK_BP ? state.rightOpen : state.mobilePanel === 'right'
+}
+
 export function defaultSeam(): SeamConfig {
   return { ...DEFAULT_SEAM }
+}
+
+/** 抽取要同步到服务端的库设置子集。 */
+export function librarySettings(state: EditorState): LibrarySettings {
+  return {
+    stampDefaults: state.stampDefaults,
+    stampMeta: state.stampMeta,
+    outputNameTemplate: state.outputNameTemplate
+  }
 }

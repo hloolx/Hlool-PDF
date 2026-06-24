@@ -1,7 +1,7 @@
 import { clamp, type PageInfo, type Placement, type StampAsset } from '../../lib/types'
 import { mmToPt } from '../../lib/units'
 import { parsePageExpression } from '../../lib/pages'
-import { activeFile, useEditorStore, MAX_PLACEMENTS_PER_JOB } from '../../state/store'
+import { activeFile, selectedPlacement, useEditorStore, MAX_PLACEMENTS_PER_JOB } from '../../state/store'
 import { toast } from '../../state/toasts'
 import { pageAtPoint } from '../viewer/pageRegistry'
 
@@ -173,6 +173,77 @@ export function resizePlacement(placement: Placement, pageInfo: PageInfo, target
     xPt: clamp(centerX - widthPt / 2, 0, Math.max(0, pageInfo.widthPt - widthPt)),
     yPt: clamp(centerY - heightPt / 2, 0, Math.max(0, pageInfo.heightPt - heightPt))
   })
+}
+
+/** 键盘等比缩放当前选中印章（factor>1 放大）。返回是否处理。 */
+export function scaleSelected(factor: number) {
+  const state = useEditorStore.getState()
+  const placement = selectedPlacement(state)
+  const file = activeFile(state)
+  const pageInfo = file?.pages.find((p) => p.pageNumber === placement?.pageNumber)
+  if (!placement || !pageInfo) return false
+  resizePlacement(placement, pageInfo, placement.widthPt * factor)
+  return true
+}
+
+/** 键盘旋转当前选中印章；snap 时吸附到 15° 网格。返回是否处理。 */
+export function rotateSelected(degDelta: number, snap = false) {
+  const state = useEditorStore.getState()
+  const placement = selectedPlacement(state)
+  if (!placement) return false
+  let rotation = snap ? Math.round((placement.rotation + degDelta) / 15) * 15 : placement.rotation + degDelta
+  rotation = ((Math.round(rotation * 10) / 10 + 540) % 360) - 180
+  state.updatePlacement(placement.id, { rotation })
+  return true
+}
+
+/**
+ * 页面顺时针旋转 deg（90/180/270）后，把该页上的一个印章随纸张一起变换：
+ * 中心点按页面旋转映射、宽高在 90/270 时对调、自身角度加上页面旋转量。
+ * 坐标用旋转前的页面几何（oldPage）计算，结果夹在旋转后的页面内。
+ */
+export function rotatePlacementOnPage(placement: Placement, oldPage: PageInfo, deg: number): Placement {
+  const r = ((deg % 360) + 360) % 360
+  if (r === 0) return placement
+  const W = oldPage.widthPt
+  const H = oldPage.heightPt
+  const cx = placement.xPt + placement.widthPt / 2
+  const cy = placement.yPt + placement.heightPt / 2
+
+  let ncx: number
+  let ncy: number
+  let nw: number
+  let nh: number
+  if (r === 180) {
+    // 原点左下坐标系：(x,y) → (W-x, H-y)，尺寸不变。
+    ncx = W - cx
+    ncy = H - cy
+    nw = placement.widthPt
+    nh = placement.heightPt
+  } else if (r === 90) {
+    // 顺时针 90°：(x,y) → (H-y, x)，新页 H×W，宽高对调。
+    ncx = H - cy
+    ncy = cx
+    nw = placement.heightPt
+    nh = placement.widthPt
+  } else {
+    // 顺时针 270°（= 逆时针 90°）：(x,y) → (y, W-x)，新页 H×W，宽高对调。
+    ncx = cy
+    ncy = W - cx
+    nw = placement.heightPt
+    nh = placement.widthPt
+  }
+  const newW = r === 180 ? W : H
+  const newH = r === 180 ? H : W
+  const rotation = ((placement.rotation + r + 540) % 360) - 180
+  return {
+    ...placement,
+    xPt: clamp(ncx - nw / 2, 0, Math.max(0, newW - nw)),
+    yPt: clamp(ncy - nh / 2, 0, Math.max(0, newH - nh)),
+    widthPt: nw,
+    heightPt: nh,
+    rotation
+  }
 }
 
 function randomDelta(maxAbs: number) {

@@ -1,67 +1,63 @@
-import { useEffect } from 'react'
-import { activeFile, fileContentSrc, useEditorStore } from '../state/store'
+import { Suspense, lazy, useEffect } from 'react'
+import { Loader2 } from 'lucide-react'
+import { useEditorStore } from '../state/store'
 import { TipProvider } from '../ui/Tooltip'
 import { ToastHost } from '../ui/ToastHost'
-import { usePdfDocument } from '../features/viewer/usePdfDocument'
-import { Viewer } from '../features/viewer/Viewer'
-import { Thumbnails } from '../features/thumbnails/Thumbnails'
-import { StampShelf } from '../features/stamps/Shelf'
-import { Inspector } from '../features/inspector/Inspector'
-import { GhostLayer } from '../features/placements/GhostLayer'
-import { JobsOverlay } from '../features/jobs/JobsOverlay'
-import { PreviewDialog } from '../features/jobs/PreviewDialog'
-import { HistoryDrawer } from '../features/jobs/HistoryDrawer'
-import { ThemeFxLayer } from '../features/theme/ThemeFx'
-import { WindowDropZone } from '../features/workspace/WindowDropZone'
-import { ImportChoiceDialog } from '../features/workspace/ImportChoiceDialog'
-import { PasswordDialog } from '../features/workspace/PasswordDialog'
-import { bootstrapWorkspace } from '../features/workspace/actions'
-import { TopBar } from './TopBar'
-import { useGlobalKeys } from './useGlobalKeys'
+import { bootWorkspace } from '../features/workspace/boot'
+import { AuthScreen } from '../features/auth/AuthScreen'
+import { useAuth } from '../features/auth/useAuth'
+
+// 主工作区单独切包（pdfjs / 画布等重依赖随之离开入口包）。
+const Workspace = lazy(() => import('./Workspace'))
+
+function FullScreenLoader() {
+  return (
+    <div className="flex h-full items-center justify-center bg-canvas text-ink-muted">
+      <Loader2 size={22} className="animate-spin" />
+    </div>
+  )
+}
 
 export function App() {
   const theme = useEditorStore((state) => state.theme)
-  const file = useEditorStore(activeFile)
-  const src = useEditorStore((state) => {
-    const active = activeFile(state)
-    return active ? fileContentSrc(state, active.fileId) : null
-  })
-  const { doc, error } = usePdfDocument(src)
+  const status = useAuth((state) => state.status)
+  const promptLogin = useAuth((state) => state.promptLogin)
+  const init = useAuth((state) => state.init)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
   }, [theme])
 
   useEffect(() => {
-    void bootstrapWorkspace()
-  }, [])
+    void init()
+    // 认证检查进行时就预取工作区分包，登录完成时通常已就绪，避免出现额外的加载闪烁。
+    void import('./Workspace')
+  }, [init])
 
-  useGlobalKeys()
+  // Boot the library once a session is confirmed (guest, fresh login or cookie).
+  useEffect(() => {
+    if (status === 'authed') void bootWorkspace()
+  }, [status])
+
+  if (status === 'loading') {
+    return <FullScreenLoader />
+  }
+
+  // 'anon' = 游客模式被关闭，必须登录；promptLogin = 已登录用户主动打开登录/注册。
+  if (status === 'anon' || promptLogin) {
+    return (
+      <TipProvider>
+        <AuthScreen />
+        <div className="fixed bottom-4 right-4 z-[60]">
+          <ToastHost />
+        </div>
+      </TipProvider>
+    )
+  }
 
   return (
-    <TipProvider>
-      <div className="flex h-full flex-col">
-        <TopBar />
-        <div className="flex min-h-0 flex-1">
-          <aside className="flex w-[208px] shrink-0 flex-col border-r border-line bg-panel">
-            <Thumbnails doc={doc} />
-            <StampShelf />
-          </aside>
-          <Viewer doc={doc} error={error} />
-          <Inspector />
-        </div>
-      </div>
-      <GhostLayer />
-      <WindowDropZone />
-      <ImportChoiceDialog />
-      <PasswordDialog />
-      <PreviewDialog />
-      <HistoryDrawer />
-      <ThemeFxLayer />
-      <div className="fixed bottom-4 right-4 z-40 flex flex-col items-end gap-2">
-        <JobsOverlay />
-        <ToastHost />
-      </div>
-    </TipProvider>
+    <Suspense fallback={<FullScreenLoader />}>
+      <Workspace />
+    </Suspense>
   )
 }

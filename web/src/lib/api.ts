@@ -42,6 +42,26 @@ export async function postJSON<T>(url: string, body: unknown): Promise<T> {
   )
 }
 
+export async function putJSON<T>(url: string, body: unknown): Promise<T> {
+  return parseJSON<T>(
+    await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+  )
+}
+
+export async function patchJSON<T>(url: string, body: unknown): Promise<T> {
+  return parseJSON<T>(
+    await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+  )
+}
+
 export async function deleteJSON<T = { status: string }>(url: string): Promise<T> {
   return parseJSON<T>(await fetch(url, { method: 'DELETE' }))
 }
@@ -53,6 +73,24 @@ export async function upload<T>(url: string, file: Blob, name: string, fields?: 
     if (value) body.append(key, value)
   }
   return parseJSON<T>(await fetch(url, { method: 'POST', body }))
+}
+
+/** POST 一个 multipart 表单，期望响应体是二进制（如成品 PDF）；出错时解析 JSON 错误。 */
+export async function postFormBlob(url: string, form: FormData): Promise<Blob> {
+  const res = await fetch(url, { method: 'POST', body: form })
+  if (!res.ok) {
+    let code: string | undefined
+    let message = res.statusText || 'Request failed'
+    try {
+      const body = (await res.json()) as { error?: unknown; code?: unknown }
+      if (body.error) message = String(body.error)
+      if (body.code) code = String(body.code)
+    } catch {
+      /* 非 JSON 错误体：用状态文本 */
+    }
+    throw new ApiError(localizeError(message), res.status, code)
+  }
+  return res.blob()
 }
 
 export async function getBlob(url: string): Promise<Blob> {
@@ -77,18 +115,21 @@ export function localizeError(value: string) {
     'Request failed': '请求失败',
     'method not allowed': '请求方法不被支持。',
     'request origin is not allowed': '当前请求来源不被允许。',
+    'authentication required': '请先登录。',
+    'incorrect username or password': '用户名或密码不正确。',
+    'too many attempts, please try again later': '尝试次数过多，请稍后再试。',
+    'server is busy, please retry shortly': '服务器繁忙，请稍后重试。',
     'seam seal needs at least two pages': '骑缝章至少需要 2 页。',
     'seam seal size is out of range': '骑缝章尺寸超出允许范围。',
     'seam seal margin is out of range': '骑缝章边距超出允许范围。',
     'seam seal max slices is out of range': '骑缝章最大切片数超出允许范围。',
-    'PDF file not found': '找不到该 PDF 文件。',
-    'only PDF files are supported': '只支持 PDF 与 PNG / JPG / WebP 图片文件。',
-    'image dimensions are out of range': '图片尺寸超出允许范围。',
+    'a PDF file is required': '请先选择 PDF 文件。',
     'at least one page is required': '至少需要一页。',
     'at least one stamp or seam seal is required': '请先放置印章或启用骑缝章。',
-    'too many PDF jobs are already running': '处理任务已排满，请稍候重试。',
+    'a referenced stamp was not found': '引用的印章不存在，请重新选择。',
     'PDF password is required': '该 PDF 受密码保护，请输入打开密码。',
     'PDF password is incorrect': 'PDF 密码不正确，请重试。',
+    'only PNG and JPG stamp images are supported': '只支持 PNG / JPG 印章图片。',
     'invalid stamp id': '印章标识无效。'
   }
   if (exact[text]) return exact[text]
@@ -108,9 +149,5 @@ export function localizeError(value: string) {
   if (match) return `PDF 页数过多，最多 ${match[1]} 页。`
   match = text.match(/^too many pages to compose; max is (\d+)$/i)
   if (match) return `拼接页数过多，最多 ${match[1]} 页。`
-  match = text.match(/^unsupported image: /i)
-  if (match) return '无法识别的图片内容，请使用 PNG / JPG / WebP。'
-  match = text.match(/^stamp on page (\d+) is outside the allowed coordinate range$/i)
-  if (match) return `第 ${match[1]} 页的印章位置超出允许范围。`
   return text
 }

@@ -2,15 +2,19 @@ import { useEffect } from 'react'
 import { isEditingField } from '../lib/dom'
 import { mmToPt } from '../lib/units'
 import { activeFile, redo, selectedPlacement, undo, useEditorStore } from '../state/store'
-import { generateCurrent } from '../features/jobs/actions'
-import { duplicatePlacement, nudgeSelected } from '../features/placements/actions'
+import { generateCurrent } from '../features/generate/actions'
+import { duplicatePlacement, nudgeSelected, rotateSelected, scaleSelected } from '../features/placements/actions'
 import { useGhost } from '../features/placements/ghost'
+import { deletePages } from '../features/thumbnails/reorder'
 import { scrollToPage } from '../features/viewer/pageRegistry'
+import { deleteStampsAction } from '../features/workspace/actions'
+import { useShortcutHelp } from '../features/help/ShortcutHelp'
 
 /**
  * 全局快捷键：
- * Ctrl+Z/Y 撤销重做 · 方向键微移(Shift 大步) · Ctrl+D 复制 · Del 删除
- * Esc 退出/取消选中 · PgUp/PgDn/Home/End 翻页 · Ctrl+Enter 生成
+ * Ctrl+Z/Y 撤销重做 · 方向键微移(Shift 大步) · +/− 缩放 · [ ] 旋转
+ * Ctrl+D 复制 · Del 删除 · Esc 退出/取消选中 · PgUp/PgDn/Home/End 翻页
+ * Ctrl+Enter 生成 · ? 快捷键帮助
  */
 export function useGlobalKeys() {
   useEffect(() => {
@@ -22,6 +26,11 @@ export function useGlobalKeys() {
       }
       const state = useEditorStore.getState()
 
+      if (event.key === '?' || (event.key === '/' && event.shiftKey)) {
+        event.preventDefault()
+        useShortcutHelp.getState().toggle()
+        return
+      }
       if (mod && (event.key === 'z' || event.key === 'Z')) {
         event.preventDefault()
         if (event.shiftKey) redo()
@@ -49,6 +58,11 @@ export function useGlobalKeys() {
 
       switch (event.key) {
         case 'Escape': {
+          if (state.selectedStampIds.length > 0 || state.selectedPageNumbers.length > 0) {
+            state.clearBulkSelection()
+            event.preventDefault()
+            return
+          }
           state.arm(null)
           state.select(null)
           useGhost.getState().endDrag()
@@ -56,7 +70,19 @@ export function useGlobalKeys() {
         }
         case 'Delete':
         case 'Backspace': {
-          if (state.selection?.kind === 'placement') {
+          if (state.selectedStampIds.length > 0) {
+            event.preventDefault()
+            const ids = new Set(state.selectedStampIds)
+            const stamps = state.stamps.filter((stamp) => ids.has(stamp.stampId))
+            void deleteStampsAction(stamps)
+          } else if (state.selectedPageNumbers.length > 0) {
+            const file = activeFile(state)
+            if (!file) return
+            event.preventDefault()
+            const pages = state.selectedPageNumbers
+            state.clearBulkSelection()
+            void deletePages(file, pages)
+          } else if (state.selection?.kind === 'placement') {
             event.preventDefault()
             state.removePlacement(state.selection.id)
           } else if (state.selection?.kind === 'seam') {
@@ -73,6 +99,21 @@ export function useGlobalKeys() {
           const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0
           const dy = event.key === 'ArrowUp' ? step : event.key === 'ArrowDown' ? -step : 0
           if (nudgeSelected(dx, dy)) event.preventDefault()
+          return
+        }
+        case '+':
+        case '=':
+        case '-':
+        case '_': {
+          const grow = event.key === '+' || event.key === '='
+          const factor = grow ? (event.shiftKey ? 1.1 : 1.03) : event.shiftKey ? 1 / 1.1 : 1 / 1.03
+          if (scaleSelected(factor)) event.preventDefault()
+          return
+        }
+        case '[':
+        case ']': {
+          const dir = event.key === ']' ? 1 : -1
+          if (rotateSelected(dir * (event.shiftKey ? 15 : 1), event.shiftKey)) event.preventDefault()
           return
         }
         case 'PageDown':

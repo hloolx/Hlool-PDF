@@ -118,6 +118,9 @@ export function ConfirmButton({
       }}
     >
       {children}
+      <span role="status" aria-live="assertive" className="sr-only">
+        {armed ? confirmLabel : ''}
+      </span>
     </button>
   )
 }

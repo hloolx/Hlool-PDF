@@ -5,6 +5,10 @@ export type PageInfo = {
   rotation: number
 }
 
+/**
+ * 一个工作区文件。PDF 的真源是浏览器内存里的 blob（阅后即焚：服务器不留存），
+ * 页面几何由 PDF.js 在导入时算出（与服务端 pdfcore.PageInfo 同为未旋转 pt）。
+ */
 export type PDFFile = {
   fileId: string
   name: string
@@ -12,17 +16,34 @@ export type PDFFile = {
   pageCount: number
   pages: PageInfo[]
   createdAt: string
+  /** PDF 字节，仅存在于浏览器内存。 */
+  blob: Blob
+  /** 加密 PDF 的打开密码（渲染与加工都要用）。 */
+  password?: string
 }
 
 export type StampAsset = {
   stampId: string
   name: string
+  /** 后端代理内容地址 /api/stamps/{id}/content（同源带 cookie）。 */
   url: string
+  mime?: string
   widthPx: number
   heightPx: number
-  /** false = 旧版遗留在服务端、尚未迁入浏览器持久层认领的印章。 */
-  sessionScoped?: boolean
   createdAt: string
+}
+
+export type AuthUser = {
+  username: string
+  /** 临时身份（未注册）：可正常使用，但库会在约 24 小时后清除。 */
+  isGuest?: boolean
+}
+
+/** 跟随账号、存到服务端 /api/settings 的用户库偏好（与设备无关的部分）。 */
+export type LibrarySettings = {
+  stampDefaults?: { sizeMm: number; opacity: number; rotation: number }
+  stampMeta?: Record<string, { alias?: string; sizeMm?: number }>
+  outputNameTemplate?: string
 }
 
 export type Placement = {
@@ -57,20 +78,6 @@ export type FileConfig = {
   placements: Placement[]
   seamEnabled: boolean
   seam: SeamConfig
-}
-
-export type JobStatus = 'queued' | 'running' | 'done' | 'failed'
-
-export type Job = {
-  jobId: string
-  fileId: string
-  status: JobStatus
-  progress: number
-  error?: string
-  downloadUrl?: string
-  outputName?: string
-  createdAt: string
-  updatedAt: string
 }
 
 export type Selection = { kind: 'placement'; id: string } | { kind: 'seam' } | null

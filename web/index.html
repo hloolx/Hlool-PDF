@@ -8,6 +8,16 @@
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1f2329" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>hlool pdf</title>
+    <script>
+      // 首帧前同步还原主题，避免暗色用户每次加载先闪一下亮色（FOUC）。
+      // 只设 data-theme：随后渲染阻塞的样式表据此推导背景色与 color-scheme，
+      // 故不在元素上写内联 color-scheme/background（否则会盖过运行时切换）。
+      // 逻辑须与 store 初始化保持一致：仅当显式保存为 dark 时用暗色，否则亮色。
+      try {
+        var saved = JSON.parse(localStorage.getItem('hlool-pdf:prefs-v3') || '{}')
+        document.documentElement.dataset.theme = saved.theme === 'dark' ? 'dark' : 'light'
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

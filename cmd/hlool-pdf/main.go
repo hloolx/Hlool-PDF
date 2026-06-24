@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -9,30 +10,27 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
+	"hlool-pdf/internal/auth"
+	"hlool-pdf/internal/config"
+	"hlool-pdf/internal/library"
 	"hlool-pdf/internal/server"
-	"hlool-pdf/internal/storage"
 	"hlool-pdf/internal/webui"
 )
 
 func main() {
-	mode := flag.String("mode", envOr("HLOOL_MODE", "desktop"), "run mode: desktop or web")
-	addr := flag.String("addr", envOr("HLOOL_ADDR", ""), "HTTP listen address")
-	dataDir := flag.String("data-dir", envOr("HLOOL_DATA_DIR", ""), "data directory")
-	webDir := flag.String("web-dir", envOr("HLOOL_WEB_DIR", ""), "web UI dist directory")
-	authUser := flag.String("auth-user", envOr("HLOOL_AUTH_USER", ""), "basic auth username")
-	authPassword := flag.String("auth-password", envOr("HLOOL_AUTH_PASSWORD", ""), "basic auth password")
-	trustProxyAuth := flag.Bool("trust-proxy-auth", envBool("HLOOL_TRUST_PROXY_AUTH", false), "allow web mode without built-in auth because a trusted reverse proxy handles authentication")
-	corsOrigins := flag.String("cors-origins", envOr("HLOOL_CORS_ORIGINS", ""), "comma-separated allowed CORS origins")
-	maxJobs := flag.Int("max-jobs", envInt("HLOOL_MAX_JOBS", 2), "maximum concurrent PDF jobs")
-	maxJobBodyMB := flag.Int64("max-job-body-mb", envInt64("HLOOL_MAX_JOB_BODY_MB", 4), "maximum JSON job request size in MiB")
-	openBrowser := flag.Bool("open", false, "open the app in the default browser after start")
+	addrFlag := flag.String("addr", "", "override HTTP listen address")
+	dataDirFlag := flag.String("data-dir", "", "override data directory")
+	webDirFlag := flag.String("web-dir", "", "web UI dist directory")
+	openFlag := flag.Bool("open", false, "open the app in the default browser after start")
 	flag.Parse()
+
 	openFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "open" {
@@ -40,63 +38,62 @@ func main() {
 		}
 	})
 
-	if *addr == "" {
-		if *mode == "web" {
-			*addr = "0.0.0.0:" + envOr("PORT", "8080")
-		} else {
-			*addr = "127.0.0.1:8088"
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *addrFlag != "" {
+		cfg.Addr = *addrFlag
+	}
+	if *dataDirFlag != "" {
+		if abs, err := filepath.Abs(*dataDirFlag); err == nil {
+			cfg.DataDir = abs
 		}
 	}
-	if *dataDir == "" {
-		if *mode == "web" {
-			*dataDir = "/data"
-		} else {
-			*dataDir = defaultDesktopDataDir()
-		}
-	}
-	if *mode == "desktop" && !openFlagSet {
-		*openBrowser = true
-	}
-	if (*authUser == "") != (*authPassword == "") {
-		log.Fatal("basic auth requires both username and password")
-	}
-	if *mode != "desktop" && *mode != "web" {
-		log.Fatal("mode must be desktop or web")
-	}
-	if *mode == "web" && *authUser == "" && *authPassword == "" && !*trustProxyAuth {
-		log.Fatal("web mode requires HLOOL_AUTH_USER/HLOOL_AUTH_PASSWORD or HLOOL_TRUST_PROXY_AUTH=1")
+	if openFlagSet {
+		cfg.OpenBrowser = *openFlag
 	}
 
-	webFS := resolveWebFS(*webDir)
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := auth.OpenDB(filepath.Join(cfg.DataDir, "auth.db"))
+	if err != nil {
+		log.Fatalf("open auth database: %v", err)
+	}
+	defer db.Close()
+	authSvc := auth.NewService(db, auth.Options{SecureCookies: cfg.SecureCookies})
+
+	lib, backend, err := buildLibrary(cfg)
+	if err != nil {
+		log.Fatalf("init storage backend: %v", err)
+	}
+
+	webFS := resolveWebFS(*webDirFlag)
 	if webFS == nil {
 		log.Printf("web UI not found; serving API-only fallback")
 	}
 
-	listener, err := net.Listen("tcp", *addr)
+	listener, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		log.Fatal(err)
-	}
-	// 先抢端口再初始化存储：误开第二个实例时在这之前就退出，
-	// 启动清空不会误删正在运行实例的会话数据。
-	store, err := storage.New(*dataDir)
-	if err != nil {
-		log.Fatal(err)
-	}
-	actualAddr := listener.Addr().String()
-	if host, port, err := net.SplitHostPort(actualAddr); err == nil {
-		if host == "::" || host == "" {
-			host = "127.0.0.1"
-		}
-		actualAddr = net.JoinHostPort(host, port)
-	}
-	url := "http://" + actualAddr
-	log.Printf("hlool pdf listening at %s", url)
-	log.Printf("data directory: %s", store.Root())
-	if *mode == "web" && *trustProxyAuth {
-		log.Printf("web mode is trusting an upstream reverse proxy for authentication")
 	}
 
-	if *openBrowser {
+	url := displayURL(listener.Addr().String(), cfg.TLSEnabled())
+	log.Printf("hlool pdf listening at %s", url)
+	log.Printf("storage backend: %s", backend)
+	log.Printf("data directory: %s", cfg.DataDir)
+	if len(cfg.AllowedHosts) == 0 {
+		log.Printf("warning: HLOOL_ALLOWED_HOSTS is empty; any Host header is accepted (set it in production)")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go backgroundSweeps(ctx, db, lib)
+
+	if cfg.OpenBrowser {
 		go func() {
 			time.Sleep(300 * time.Millisecond)
 			if err := openURL(url); err != nil {
@@ -106,21 +103,169 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Handler: server.New(store, webFS, server.Options{
-			AuthUsername:      *authUser,
-			AuthPassword:      *authPassword,
-			CORSOrigins:       splitCSV(*corsOrigins),
-			MaxConcurrentJobs: *maxJobs,
-			MaxJobBodySize:    *maxJobBodyMB << 20,
+		Handler: server.New(authSvc, lib, webFS, server.Options{
+			CORSOrigins:         cfg.CORSOrigins,
+			AllowedHosts:        cfg.AllowedHosts,
+			BehindProxy:         cfg.BehindProxy,
+			HSTS:                cfg.TLSEnabled() || cfg.BehindProxy,
+			AllowGuest:          cfg.AllowGuest,
+			MaxProcessBodyBytes: cfg.MaxProcessBodyBytes,
+			MaxStampBytes:       cfg.MaxStampBytes,
+			MaxConcurrentJobs:   cfg.MaxConcurrentJobs,
 		}).Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
 		ReadTimeout:       10 * time.Minute,
 		WriteTimeout:      10 * time.Minute,
 		IdleTimeout:       60 * time.Second,
 	}
-	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+
+	serveErr := make(chan error, 1)
+	go func() {
+		if cfg.TLSEnabled() {
+			serveErr <- srv.ServeTLS(listener, cfg.TLSCert, cfg.TLSKey)
+		} else {
+			serveErr <- srv.Serve(listener)
+		}
+	}()
+
+	select {
+	case err := <-serveErr:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		stop() // restore default signal handling so a second signal force-quits
+		log.Printf("shutdown signal received; draining in-flight requests (up to 20s)")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown: %v", err)
+			_ = srv.Close()
+		}
 	}
+}
+
+// buildLibrary selects the S3 or local-filesystem backend based on config.
+func buildLibrary(cfg config.Config) (library.Store, string, error) {
+	if cfg.UseS3() {
+		store, err := library.NewS3Store(context.Background(), library.S3Options{
+			Bucket:                cfg.S3.Bucket,
+			Region:                cfg.S3.Region,
+			Endpoint:              cfg.S3.Endpoint,
+			Prefix:                cfg.S3.Prefix,
+			ForcePathStyle:        cfg.S3.ForcePathStyle,
+			SSE:                   cfg.S3.SSE,
+			KMSKeyID:              cfg.S3.KMSKeyID,
+			ChecksumWhenSupported: cfg.S3.ChecksumWhenSupported,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		return store, fmt.Sprintf("s3 (bucket %s, sse %s)", cfg.S3.Bucket, sseLabel(cfg.S3.SSE)), nil
+	}
+	store, err := library.NewLocalStore(cfg.DataDir)
+	if err != nil {
+		return nil, "", err
+	}
+	return store, "local filesystem", nil
+}
+
+// sseLabel renders the configured server-side-encryption mode for the startup log.
+func sseLabel(sse string) string {
+	if sse == "" || sse == "none" {
+		return "off"
+	}
+	return sse
+}
+
+// backgroundSweeps periodically purges expired sessions, burns expired guest
+// accounts (their library plus the account row) and clears stale temp dirs (a
+// backstop for the per-request read-and-burn cleanup). It returns when ctx is
+// cancelled (server shutdown), so it never races the deferred db.Close().
+func backgroundSweeps(ctx context.Context, db *auth.DB, lib library.Store) {
+	purgeExpiredGuests(ctx, db, lib)
+	sweepTempDirs(time.Hour)
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := db.DeleteExpiredSessions(ctx, time.Now()); err != nil {
+				log.Printf("session cleanup: %v", err)
+			}
+			purgeExpiredGuests(ctx, db, lib)
+			sweepTempDirs(time.Hour)
+		}
+	}
+}
+
+// purgeExpiredGuests burns every guest account older than auth.GuestTTL: its
+// library first, then the account row (whose session cascades away). A library
+// error leaves the row for the next sweep rather than orphaning stored data.
+func purgeExpiredGuests(ctx context.Context, db *auth.DB, lib library.Store) {
+	ids, err := db.ExpiredGuestIDs(ctx, time.Now().Add(-auth.GuestTTL))
+	if err != nil {
+		log.Printf("guest sweep: %v", err)
+		return
+	}
+	burned := 0
+	for _, id := range ids {
+		if err := lib.PurgeUser(ctx, id); err != nil {
+			log.Printf("guest sweep: purge library: %v", err)
+			continue
+		}
+		if err := db.DeleteUser(ctx, id); err != nil {
+			log.Printf("guest sweep: delete account: %v", err)
+			continue
+		}
+		burned++
+	}
+	if burned > 0 {
+		log.Printf("guest sweep: burned %d expired guest account(s)", burned)
+	}
+}
+
+// sweepTempDirs removes leftover hlool-* working directories older than maxAge.
+func sweepTempDirs(maxAge time.Duration) {
+	base := os.TempDir()
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "hlool-process-") &&
+			!strings.HasPrefix(name, "hlool-compose-") &&
+			!strings.HasPrefix(name, "hlool-image-") &&
+			!strings.HasPrefix(name, "hlool-seam-") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(base, name))
+	}
+}
+
+func displayURL(listenAddr string, tls bool) string {
+	scheme := "http"
+	if tls {
+		scheme = "https"
+	}
+	if host, port, err := net.SplitHostPort(listenAddr); err == nil {
+		if host == "::" || host == "" || host == "0.0.0.0" {
+			host = "127.0.0.1"
+		}
+		listenAddr = net.JoinHostPort(host, port)
+	}
+	return scheme + "://" + listenAddr
 }
 
 func resolveWebFS(webDir string) fs.FS {
@@ -138,62 +283,6 @@ func resolveWebFS(webDir string) fs.FS {
 		return os.DirFS(dir)
 	}
 	return nil
-}
-
-func defaultDesktopDataDir() string {
-	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "hlool-pdf")
-	}
-	return filepath.Join(".", ".hlool-data")
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func envInt(key string, fallback int) int {
-	v, err := strconv.Atoi(envOr(key, ""))
-	if err != nil {
-		return fallback
-	}
-	return v
-}
-
-func envInt64(key string, fallback int64) int64 {
-	v, err := strconv.ParseInt(envOr(key, ""), 10, 64)
-	if err != nil {
-		return fallback
-	}
-	return v
-}
-
-func envBool(key string, fallback bool) bool {
-	switch strings.ToLower(strings.TrimSpace(envOr(key, ""))) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return fallback
-	}
-}
-
-func splitCSV(value string) []string {
-	if value == "" {
-		return nil
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }
 
 func openURL(url string) error {

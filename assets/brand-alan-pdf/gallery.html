@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hlool pdf brand board</title>
+    <style>
+      :root {
+        --navy: #071b4a;
+        --blue: #0b73ff;
+        --cyan: #9eebff;
+        --star: #ffc72c;
+        --red: #c8372d;
+        --ink: #1d2329;
+        --muted: #687789;
+        --line: #dde7f2;
+        --bg: #f5f8fc;
+        --panel: #ffffff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.5 Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      }
+      header {
+        padding: 44px 48px 28px;
+        background: linear-gradient(135deg, #fafdff, #edf8ff);
+        border-bottom: 1px solid var(--line);
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1 {
+        color: var(--navy);
+        font-size: clamp(34px, 5vw, 64px);
+        line-height: 1;
+        letter-spacing: 0;
+      }
+      header p {
+        margin-top: 14px;
+        max-width: 720px;
+        color: var(--muted);
+        font-size: 17px;
+      }
+      main {
+        padding: 34px 48px 64px;
+      }
+      section + section {
+        margin-top: 38px;
+      }
+      h2 {
+        margin-bottom: 16px;
+        color: var(--navy);
+        font-size: 22px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 18px;
+      }
+      .wide {
+        grid-column: 1 / -1;
+      }
+      .card {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+        box-shadow: 0 12px 30px rgb(7 27 74 / 0.07);
+      }
+      .media {
+        display: flex;
+        min-height: 220px;
+        align-items: center;
+        justify-content: center;
+        background: #fff;
+        border-bottom: 1px solid var(--line);
+      }
+      .media img {
+        display: block;
+        max-width: 100%;
+        max-height: 420px;
+        object-fit: contain;
+      }
+      .body {
+        padding: 14px 16px 16px;
+      }
+      .body h3 {
+        color: var(--navy);
+        font-size: 15px;
+      }
+      .body p {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .palette {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+      }
+      .swatch {
+        min-height: 96px;
+        border: 1px solid rgb(7 27 74 / 0.1);
+        border-radius: 12px;
+        padding: 12px;
+        color: #fff;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        box-shadow: 0 8px 20px rgb(7 27 74 / 0.08);
+      }
+      .swatch.light {
+        color: var(--navy);
+      }
+      .swatch strong {
+        font-size: 13px;
+      }
+      .swatch code {
+        margin-top: 2px;
+        font-size: 12px;
+        opacity: 0.82;
+      }
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        background: rgb(11 115 255 / 0.1);
+        color: var(--blue);
+        font-size: 12px;
+        font-weight: 700;
+        padding: 3px 9px;
+      }
+      .reject {
+        background: rgb(200 55 45 / 0.1);
+        color: var(--red);
+      }
+      @media (max-width: 720px) {
+        header,
+        main {
+          padding-left: 18px;
+          padding-right: 18px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>hlool pdf brand board</h1>
+      <p>阿懒同学 IP × PDF 盖章工作台。蓝角云茧负责记忆点，印泥红负责产品动作，深海军蓝负责专业可信。</p>
+    </header>
+    <main>
+      <section>
+        <h2>Core Assets</h2>
+        <div class="grid">
+          <article class="card">
+            <div class="media"><img src="svg/logo-mark.svg" alt="logo mark" /></div>
+            <div class="body">
+              <h3>Logo Mark <span class="tag">recommended</span></h3>
+              <p>主头像、README、发布图使用。</p>
+            </div>
+          </article>
+          <article class="card">
+            <div class="media"><img src="svg/app-icon.svg" alt="app icon" /></div>
+            <div class="body">
+              <h3>App Icon <span class="tag">small size</span></h3>
+              <p>桌面应用、dock、favicon 大尺寸使用。</p>
+            </div>
+          </article>
+          <article class="card">
+            <div class="media"><img src="svg/favicon-alan.svg" alt="favicon" /></div>
+            <div class="body">
+              <h3>Favicon <span class="tag">16px safe</span></h3>
+              <p>强制简化云茧、困脸、蓝角。</p>
+            </div>
+          </article>
+          <article class="card wide">
+            <div class="media"><img src="svg/logo-lockup-horizontal.svg" alt="horizontal lockup" /></div>
+            <div class="body">
+              <h3>Horizontal Lockup</h3>
+              <p>文档、官网、品牌页面使用。应用顶栏建议只用小标 + 文本。</p>
+            </div>
+          </article>
+          <article class="card wide">
+            <div class="media"><img src="svg/readme-banner.svg" alt="README banner" /></div>
+            <div class="body">
+              <h3>README Banner</h3>
+              <p>确定性 SVG 首屏图，不依赖 AI 文字渲染。</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>Palette</h2>
+        <div class="palette">
+          <div class="swatch" style="background:#071B4A"><strong>Alan Navy</strong><code>#071B4A</code></div>
+          <div class="swatch" style="background:#0B73FF"><strong>Horn Blue</strong><code>#0B73FF</code></div>
+          <div class="swatch light" style="background:#9EEBFF"><strong>Soft Cyan</strong><code>#9EEBFF</code></div>
+          <div class="swatch light" style="background:#FFC72C"><strong>South Star</strong><code>#FFC72C</code></div>
+          <div class="swatch" style="background:#C8372D"><strong>Stamp Red</strong><code>#C8372D</code></div>
+          <div class="swatch light" style="background:#F8FBFF"><strong>Cloud BG</strong><code>#F8FBFF</code></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Generated Exploration</h2>
+        <div class="grid">
+          <article class="card wide">
+            <div class="media"><img src="mockups/generated-contact-sheet.jpg" alt="generated contact sheet" /></div>
+            <div class="body">
+              <h3>Contact Sheet</h3>
+              <p>9 张生成图总览。02 有伪文字风险，已标为不推荐。</p>
+            </div>
+          </article>
+          <article class="card"><div class="media"><img src="generated/01-main-mascot-logo-candidate.png" alt="main mascot logo" /></div><div class="body"><h3>Main Mascot <span class="tag">strong</span></h3><p>主视觉候选。</p></div></article>
+          <article class="card"><div class="media"><img src="generated/03-minimal-app-icon-candidate.png" alt="minimal app icon" /></div><div class="body"><h3>Minimal Icon</h3><p>正式化时参考 SVG。</p></div></article>
+          <article class="card"><div class="media"><img src="generated/04-readme-hero-product-workspace.png" alt="README hero" /></div><div class="body"><h3>README Hero <span class="tag">strong</span></h3><p>产品感最强。</p></div></article>
+          <article class="card"><div class="media"><img src="generated/05-readme-workflow-explainer.png" alt="workflow" /></div><div class="body"><h3>Workflow</h3><p>四步解释图。</p></div></article>
+          <article class="card"><div class="media"><img src="generated/06-empty-import-state.png" alt="empty import" /></div><div class="body"><h3>Empty State</h3><p>导入空态。</p></div></article>
+          <article class="card"><div class="media"><img src="generated/07-batch-queue-feature.png" alt="batch queue" /></div><div class="body"><h3>Batch Queue</h3><p>生成全部/多文件队列。</p></div></article>
+          <article class="card"><div class="media"><img src="generated/08-security-private-workspace.png" alt="security" /></div><div class="body"><h3>Security</h3><p>暗色安全候选，建议再扁平化。</p></div></article>
+          <article class="card"><div class="media"><img src="generated/09-page-organizer-feature.png" alt="page organizer" /></div><div class="body"><h3>Page Organizer</h3><p>页面整理/拼接。</p></div></article>
+          <article class="card"><div class="media"><img src="generated/02-minimal-icon-exploration-reject-pseudotext.png" alt="rejected pseudo text" /></div><div class="body"><h3>Rejected <span class="tag reject">do not use</span></h3><p>红色角标像伪文字，保留作反例。</p></div></article>
+        </div>
+      </section>
+
+      <section>
+        <h2>Feature Icons</h2>
+        <article class="card">
+          <div class="media"><img src="svg/feature-icons.svg" alt="feature icon set" /></div>
+          <div class="body">
+            <h3>Icon Set</h3>
+            <p>拖章、骑缝、批量、页面整理、私有文件、昼夜主题。</p>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

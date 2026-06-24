@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import type { PDFDocumentProxy } from '../../lib/pdfjs'
 
 /** 单页位图渲染：visible 时按 devicePixelRatio 渲染，移出视口后释放位图内存。 */
@@ -14,6 +14,7 @@ export const PageCanvas = memo(function PageCanvas({
   visible: boolean
 }) {
   const ref = useRef<HTMLCanvasElement | null>(null)
+  const [ready, setReady] = useState(false)
 
   useEffect(() => {
     const canvas = ref.current
@@ -21,6 +22,7 @@ export const PageCanvas = memo(function PageCanvas({
     if (!visible) {
       canvas.width = 0
       canvas.height = 0
+      setReady(false)
       return
     }
     let cancelled = false
@@ -37,9 +39,14 @@ export const PageCanvas = memo(function PageCanvas({
         target.width = Math.round(viewport.width)
         target.height = Math.round(viewport.height)
         renderTask = page.render({ canvas: target, canvasContext: context, viewport })
-        renderTask.promise.catch(() => {
-          /* 渲染取消是正常路径 */
-        })
+        renderTask.promise.then(
+          () => {
+            if (!cancelled) setReady(true)
+          },
+          () => {
+            /* 渲染取消是正常路径 */
+          }
+        )
       })
       .catch(() => {})
     return () => {
@@ -48,5 +55,12 @@ export const PageCanvas = memo(function PageCanvas({
     }
   }, [doc, pageNumber, zoom, visible])
 
-  return <canvas ref={ref} className="absolute inset-0 h-full w-full" />
+  return (
+    <>
+      {!ready && (
+        <div className="pulse-soft pointer-events-none absolute inset-0 bg-sunken" aria-hidden />
+      )}
+      <canvas ref={ref} className="absolute inset-0 h-full w-full" />
+    </>
+  )
 })
