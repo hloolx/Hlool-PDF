@@ -44,7 +44,9 @@ type Options struct {
 	AllowedHosts        []string
 	BehindProxy         bool
 	HSTS                bool
-	AllowGuest          bool
+	AllowGuest          bool // legacy server-test shorthand; mapped into AuthDefaults when AuthDefaultsSet is false.
+	AuthDefaults        auth.AuthSettings
+	AuthDefaultsSet     bool
 	MaxProcessBodyBytes int64
 	MaxStampBytes       int64
 	MaxConcurrentJobs   int
@@ -71,6 +73,14 @@ func New(authSvc *auth.Service, lib library.Store, webFS fs.FS, opts Options) *S
 	if opts.MaxConcurrentJobs <= 0 {
 		opts.MaxConcurrentJobs = runtime.GOMAXPROCS(0)
 	}
+	// Preserve the old zero-value server behavior: password registration is open
+	// unless explicitly disabled by config/admin settings, while guest access
+	// stays off for tests that construct Options{} directly.
+	if !opts.AuthDefaultsSet {
+		opts.AuthDefaults.RegisterEnabled = true
+		opts.AuthDefaults.ThirdPartyRegisterEnabled = true
+		opts.AuthDefaults.GuestEnabled = opts.AllowGuest
+	}
 	return &Server{
 		auth:         authSvc,
 		lib:          lib,
@@ -91,10 +101,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/auth/logout", s.logout)
 	mux.HandleFunc("/auth/guest", s.guest)
 	mux.HandleFunc("/auth/me", s.me)
+	mux.HandleFunc("/auth/config", s.authConfig)
 
 	mux.Handle("/api/stamps", s.protected(s.stamps))
 	mux.Handle("/api/stamps/", s.protected(s.stampByID))
 	mux.Handle("/api/settings", s.protected(s.settings))
+	mux.Handle("/api/admin/settings", s.adminOnly(s.adminSettings))
+	mux.Handle("/api/admin/invites", s.adminOnly(s.adminInvites))
+	mux.Handle("/api/admin/invites/", s.adminOnly(s.adminInviteByID))
 	mux.Handle("/api/process", s.protected(s.limitJobs(s.process)))
 	mux.Handle("/api/compose", s.protected(s.limitJobs(s.compose)))
 	mux.Handle("/api/image-to-pdf", s.protected(s.limitJobs(s.imageToPDF)))
@@ -112,6 +126,14 @@ func (s *Server) Handler() http.Handler {
 // protected wraps an API handler with session authentication.
 func (s *Server) protected(h http.HandlerFunc) http.Handler {
 	return s.auth.RequireAuth(h)
+}
+
+func (s *Server) adminOnly(h http.HandlerFunc) http.Handler {
+	return s.auth.RequireAdmin(h)
+}
+
+func (s *Server) authSettings(r *http.Request) (auth.AuthSettings, error) {
+	return s.auth.AuthSettings(r.Context(), s.opts.AuthDefaults)
 }
 
 // jobQueueWait is how long a heavy request will wait for a free job slot before

@@ -320,3 +320,114 @@ func TestLoginOrRegisterExternal(t *testing.T) {
 		t.Fatalf("empty provider should fail, got %v", err)
 	}
 }
+
+func TestRegisterWithInvitePolicy(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	settings := AuthSettings{RegisterEnabled: true, InviteRequired: true, ThirdPartyRegisterEnabled: true}
+
+	if _, err := svc.RegisterWithPolicy(ctx, "ip", "invitee", "supersecret123", "", settings); err != ErrRegistrationInviteRequired {
+		t.Fatalf("missing invite should fail, got %v", err)
+	}
+
+	created, err := svc.CreateRegistrationInvites(ctx, "batch", 1, 1, time.Time{}, "admin-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 1 || created[0].Code == "" {
+		t.Fatalf("unexpected created invite: %#v", created)
+	}
+	user, err := svc.RegisterWithPolicy(ctx, "ip", "invitee", "supersecret123", created[0].Code, settings)
+	if err != nil {
+		t.Fatalf("register with invite failed: %v", err)
+	}
+	if user.Username != "invitee" {
+		t.Fatalf("unexpected user: %#v", user)
+	}
+	if _, err := svc.RegisterWithPolicy(ctx, "ip", "second", "supersecret123", created[0].Code, settings); err != ErrRegistrationInviteUsed {
+		t.Fatalf("one-use invite should be consumed, got %v", err)
+	}
+}
+
+func TestAuthSettingsAndAdminBootstrap(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	defaults := AuthSettings{RegisterEnabled: true, GuestEnabled: true}
+
+	initial, err := svc.AuthSettings(ctx, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !initial.RegisterEnabled || !initial.GuestEnabled || initial.InviteRequired {
+		t.Fatalf("defaults not applied: %#v", initial)
+	}
+
+	next := AuthSettings{RegisterEnabled: false, InviteRequired: true, ThirdPartyRegisterEnabled: false, GuestEnabled: false}
+	if err := svc.PutAuthSettings(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := svc.AuthSettings(ctx, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != next {
+		t.Fatalf("settings round trip = %#v, want %#v", loaded, next)
+	}
+
+	admin, created, err := svc.EnsureAdmin(ctx, "root", "supersecret123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || !admin.IsAdmin {
+		t.Fatalf("expected created admin, got %#v created=%v", admin, created)
+	}
+	logged, _, _, err := svc.Login(ctx, "ip", "root", "supersecret123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !logged.IsAdmin {
+		t.Fatalf("login should preserve admin flag: %#v", logged)
+	}
+}
+
+func TestExternalRegistrationPolicy(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	ident := ExternalIdentity{Provider: "oidc", Subject: "sub-1", DisplayName: "OIDC User"}
+
+	closed := AuthSettings{RegisterEnabled: false, ThirdPartyRegisterEnabled: true}
+	if _, _, _, err := svc.LoginOrRegisterExternalWithPolicy(ctx, ident, closed); err != ErrRegistrationClosed {
+		t.Fatalf("global registration off should block new external users, got %v", err)
+	}
+	thirdPartyOff := AuthSettings{RegisterEnabled: true, ThirdPartyRegisterEnabled: false}
+	if _, _, _, err := svc.LoginOrRegisterExternalWithPolicy(ctx, ident, thirdPartyOff); err != ErrRegistrationClosed {
+		t.Fatalf("third-party registration off should block new external users, got %v", err)
+	}
+
+	created, err := svc.CreateRegistrationInvites(ctx, "oauth", 1, 1, time.Time{}, "admin-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withInvite := AuthSettings{RegisterEnabled: true, InviteRequired: true, ThirdPartyRegisterEnabled: true}
+	user, token, _, err := svc.LoginOrRegisterExternalWithPolicy(ctx, ExternalIdentity{
+		Provider:    ident.Provider,
+		Subject:     ident.Subject,
+		DisplayName: ident.DisplayName,
+		InviteCode:  created[0].Code,
+	}, withInvite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.ID == "" || token == "" {
+		t.Fatalf("unexpected external login: %#v token=%q", user, token)
+	}
+	// Existing external identity can still sign in after new third-party
+	// provisioning is closed.
+	again, _, _, err := svc.LoginOrRegisterExternalWithPolicy(ctx, ident, thirdPartyOff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != user.ID {
+		t.Fatalf("existing identity should reuse user: %#v vs %#v", again, user)
+	}
+}

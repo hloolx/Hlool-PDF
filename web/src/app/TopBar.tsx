@@ -13,6 +13,7 @@ import {
   PanelRight,
   Play,
   Redo2,
+  ShieldCheck,
   Sun,
   Trash2,
   Undo2,
@@ -279,6 +280,7 @@ function UserMenu() {
   const user = useAuth((state) => state.user)
   const setPromptLogin = useAuth((state) => state.setPromptLogin)
   const isGuest = user?.isGuest ?? false
+  const isAdmin = user?.isAdmin ?? false
   return (
     <Menu>
       <MenuTrigger asChild>
@@ -305,6 +307,12 @@ function UserMenu() {
           <>
             <MenuLabel>{user?.username || '已登录'}</MenuLabel>
             <MenuSeparator />
+            {isAdmin && (
+              <MenuItem onSelect={() => (window.location.href = '/admin')}>
+                <ShieldCheck size={16} />
+                管理员后台
+              </MenuItem>
+            )}
             <MenuItem onSelect={() => void signOut()}>
               <LogOut size={16} />
               退出登录

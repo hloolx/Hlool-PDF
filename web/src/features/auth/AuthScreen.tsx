@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft, Loader2, LogIn, UserPlus } from 'lucide-react'
 import { errorText } from '../../lib/api'
+import type { AuthConfig } from '../../lib/types'
 import { Button } from '../../ui/Button'
 import { Field, TextInput } from '../../ui/Field'
 import { Segmented } from '../../ui/Segmented'
 import { bootWorkspace } from '../workspace/boot'
-import { login, register } from './api'
+import { fetchAuthConfig, login, register } from './api'
 import { useAuth } from './useAuth'
 
 type Mode = 'login' | 'register'
@@ -18,8 +19,26 @@ export function AuthScreen() {
   const [mode, setMode] = useState<Mode>(() => (useAuth.getState().status === 'authed' ? 'register' : 'login'))
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [inviteCode, setInviteCode] = useState('')
+  const [config, setConfig] = useState<AuthConfig | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    fetchAuthConfig()
+      .then((next) => {
+        if (!alive) return
+        setConfig(next)
+        if (!next.registerEnabled) setMode('login')
+      })
+      .catch(() => {
+        if (alive) setConfig({ registerEnabled: true, inviteRequired: false, thirdPartyRegisterEnabled: true, guestEnabled: false })
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -28,11 +47,12 @@ export function AuthScreen() {
     const user = username.trim()
     if (user.length < 3) return setError('用户名至少 3 个字符。')
     if (password.length < 8) return setError('密码至少 8 个字符。')
+    if (mode === 'register' && config?.inviteRequired && inviteCode.trim() === '') return setError('请输入邀请码。')
     setBusy(true)
     try {
       if (mode === 'register') {
         // 持有临时身份时，注册会就地升级该身份（印章/设置随 uid 保留）。
-        await register(user, password)
+        await register(user, password, inviteCode.trim())
       }
       const authed = await login(user, password)
       setAuthed(authed)
@@ -66,7 +86,7 @@ export function AuthScreen() {
             }}
             options={[
               { value: 'login', label: '登录' },
-              { value: 'register', label: '注册' }
+              { value: 'register', label: '注册', disabled: config?.registerEnabled === false }
             ]}
           />
 
@@ -90,8 +110,25 @@ export function AuthScreen() {
                 placeholder="至少 8 位"
               />
             </Field>
+            {mode === 'register' && config?.inviteRequired && (
+              <Field label="邀请码">
+                <TextInput
+                  className="h-10 px-3 font-mono text-xs tracking-wide"
+                  autoComplete="off"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.currentTarget.value)}
+                  placeholder="REG-XXXX-XXXX-XXXX-XXXX"
+                />
+              </Field>
+            )}
 
             {error && <p className="text-[13px] text-accent">{error}</p>}
+
+            {mode === 'register' && config?.registerEnabled === false && (
+              <p className="rounded-lg bg-sunken px-3 py-2 text-[12px] leading-relaxed text-ink-muted">
+                当前实例未开放注册，请使用已有账号登录。
+              </p>
+            )}
 
             {canDismiss && mode === 'register' && (
               <p className="rounded-lg bg-sunken px-3 py-2 text-[12px] leading-relaxed text-ink-muted">

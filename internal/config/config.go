@@ -42,6 +42,15 @@ type Config struct {
 	// the app, with the guest's library burned after auth.GuestTTL. Disable it
 	// for a closed instance that requires a registered account up front.
 	AllowGuest bool
+	// AllowRegister/RequireInvite/AllowThirdPartyRegister seed the runtime auth
+	// settings table on first boot. Admin changes are persisted in SQLite.
+	AllowRegister           bool
+	RequireInvite           bool
+	AllowThirdPartyRegister bool
+	// AdminUsername/AdminPassword optionally bootstrap or reset an administrator
+	// account at startup.
+	AdminUsername string
+	AdminPassword string
 
 	// MaxProcessBodyBytes caps the multipart body of /api/process (source PDF
 	// plus parameters).
@@ -108,10 +117,15 @@ func Load() (Config, error) {
 		AllowedHosts: splitCSV(os.Getenv("HLOOL_ALLOWED_HOSTS")),
 		CORSOrigins:  splitCSV(os.Getenv("HLOOL_CORS_ORIGINS")),
 
-		TLSCert:     strings.TrimSpace(os.Getenv("HLOOL_TLS_CERT")),
-		TLSKey:      strings.TrimSpace(os.Getenv("HLOOL_TLS_KEY")),
-		BehindProxy: envBool("HLOOL_BEHIND_PROXY", false),
-		AllowGuest:  envBool("HLOOL_ALLOW_GUEST", true),
+		TLSCert:                 strings.TrimSpace(os.Getenv("HLOOL_TLS_CERT")),
+		TLSKey:                  strings.TrimSpace(os.Getenv("HLOOL_TLS_KEY")),
+		BehindProxy:             envBool("HLOOL_BEHIND_PROXY", false),
+		AllowGuest:              envBool("HLOOL_ALLOW_GUEST", true),
+		AllowRegister:           envBool("HLOOL_ALLOW_REGISTER", true),
+		RequireInvite:           envBool("HLOOL_REQUIRE_INVITE", false),
+		AllowThirdPartyRegister: envBool("HLOOL_ALLOW_THIRD_PARTY_REGISTER", true),
+		AdminUsername:           strings.TrimSpace(os.Getenv("HLOOL_ADMIN_USERNAME")),
+		AdminPassword:           os.Getenv("HLOOL_ADMIN_PASSWORD"),
 
 		MaxProcessBodyBytes: envInt64("HLOOL_MAX_PROCESS_BODY_MB", defaultMaxProcessBodyMB) << 20,
 		MaxStampBytes:       envInt64("HLOOL_MAX_STAMP_MB", defaultMaxStampMB) << 20,

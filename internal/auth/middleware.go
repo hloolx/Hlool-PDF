@@ -38,6 +38,22 @@ func (s *Service) RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
+// RequireAdmin authenticates the session and then requires the account to carry
+// the admin flag. It intentionally returns 404-style generic text for missing
+// privilege details at the server layer, while keeping the status precise.
+func (s *Service) RequireAdmin(next http.Handler) http.Handler {
+	return s.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := UserFrom(r.Context())
+		if !user.IsAdmin {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": ErrAdminRequired.Error()})
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
 // ClientIP returns the best-effort client IP for rate limiting. When trustProxy
 // is set, the first hop of X-Forwarded-For is honored.
 func ClientIP(r *http.Request, trustProxy bool) string {

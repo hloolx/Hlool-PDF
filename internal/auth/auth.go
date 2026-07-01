@@ -91,6 +91,19 @@ func validateCredentials(username, password string) (string, error) {
 
 // Register validates input, hashes the password and creates the account.
 func (s *Service) Register(ctx context.Context, ip, username, password string) (User, error) {
+	return s.register(ctx, ip, username, password, "", false)
+}
+
+// RegisterWithPolicy applies runtime registration settings, including invite
+// requirements, before creating a password account.
+func (s *Service) RegisterWithPolicy(ctx context.Context, ip, username, password, inviteCode string, settings AuthSettings) (User, error) {
+	if !settings.RegisterEnabled {
+		return User{}, ErrRegistrationClosed
+	}
+	return s.register(ctx, ip, username, password, inviteCode, settings.InviteRequired)
+}
+
+func (s *Service) register(ctx context.Context, ip, username, password, inviteCode string, requireInvite bool) (User, error) {
 	if locked, _ := s.registerLimiter.locked(ip); locked {
 		return User{}, ErrRateLimited
 	}
@@ -109,7 +122,12 @@ func (s *Service) Register(ctx context.Context, ip, username, password string) (
 		PasswordHash: hash,
 		CreatedAt:    s.now().UTC(),
 	}
-	if err := s.db.CreateUser(ctx, user); err != nil {
+	if requireInvite {
+		err = s.db.CreateUserWithInvite(ctx, user, inviteCode, s.now().UTC())
+	} else {
+		err = s.db.CreateUser(ctx, user)
+	}
+	if err != nil {
 		return User{}, err
 	}
 	return user, nil
@@ -150,6 +168,19 @@ func (s *Service) CreateGuest(ctx context.Context, ip string) (User, string, tim
 // (full-length) session afterwards. Returns ErrNotGuest if uid is not an
 // upgradeable guest, or ErrUsernameTaken on a duplicate username.
 func (s *Service) UpgradeGuest(ctx context.Context, ip, uid, username, password string) (User, error) {
+	return s.upgradeGuest(ctx, ip, uid, username, password, "", false)
+}
+
+// UpgradeGuestWithPolicy turns a guest into a real account while applying the
+// same registration gates as password sign-up.
+func (s *Service) UpgradeGuestWithPolicy(ctx context.Context, ip, uid, username, password, inviteCode string, settings AuthSettings) (User, error) {
+	if !settings.RegisterEnabled {
+		return User{}, ErrRegistrationClosed
+	}
+	return s.upgradeGuest(ctx, ip, uid, username, password, inviteCode, settings.InviteRequired)
+}
+
+func (s *Service) upgradeGuest(ctx context.Context, ip, uid, username, password, inviteCode string, requireInvite bool) (User, error) {
 	if locked, _ := s.registerLimiter.locked(ip); locked {
 		return User{}, ErrRateLimited
 	}
@@ -162,7 +193,12 @@ func (s *Service) UpgradeGuest(ctx context.Context, ip, uid, username, password 
 	if err != nil {
 		return User{}, err
 	}
-	if err := s.db.UpgradeGuest(ctx, uid, username, hash); err != nil {
+	if requireInvite {
+		err = s.db.UpgradeGuestWithInvite(ctx, uid, username, hash, inviteCode, s.now().UTC())
+	} else {
+		err = s.db.UpgradeGuest(ctx, uid, username, hash)
+	}
+	if err != nil {
 		return User{}, err
 	}
 	return s.db.UserByID(ctx, uid)
@@ -228,6 +264,7 @@ type ExternalIdentity struct {
 	Subject     string
 	DisplayName string
 	Email       string
+	InviteCode  string
 }
 
 // LoginOrRegisterExternal is the reusable seam for pluggable third-party login.
@@ -238,6 +275,13 @@ type ExternalIdentity struct {
 // machinery (cookie, expiry, revocation, sweeps) as password users, so the rest
 // of the app needs no special-casing. Returns the user, a raw token and expiry.
 func (s *Service) LoginOrRegisterExternal(ctx context.Context, ident ExternalIdentity) (User, string, time.Time, error) {
+	return s.LoginOrRegisterExternalWithPolicy(ctx, ident, AuthSettings{RegisterEnabled: true, ThirdPartyRegisterEnabled: true})
+}
+
+// LoginOrRegisterExternalWithPolicy gates first-time federated provisioning.
+// Already-linked identities may still log in even when new third-party
+// registration is closed.
+func (s *Service) LoginOrRegisterExternalWithPolicy(ctx context.Context, ident ExternalIdentity, settings AuthSettings) (User, string, time.Time, error) {
 	provider := strings.ToLower(strings.TrimSpace(ident.Provider))
 	subject := strings.TrimSpace(ident.Subject)
 	if provider == "" || subject == "" {
@@ -246,7 +290,13 @@ func (s *Service) LoginOrRegisterExternal(ctx context.Context, ident ExternalIde
 
 	user, err := s.db.UserByIdentity(ctx, provider, subject)
 	if errors.Is(err, ErrIdentityNotFound) {
-		user, err = s.provisionExternalUser(ctx, provider, subject, ident.DisplayName)
+		if !settings.RegisterEnabled {
+			return User{}, "", time.Time{}, ErrRegistrationClosed
+		}
+		if !settings.ThirdPartyRegisterEnabled {
+			return User{}, "", time.Time{}, ErrRegistrationClosed
+		}
+		user, err = s.provisionExternalUser(ctx, provider, subject, ident.DisplayName, ident.InviteCode, settings.InviteRequired)
 	}
 	if err != nil {
 		return User{}, "", time.Time{}, err
@@ -259,13 +309,56 @@ func (s *Service) LoginOrRegisterExternal(ctx context.Context, ident ExternalIde
 	return user, token, expires, nil
 }
 
+func (s *Service) EnsureAdmin(ctx context.Context, username, password string) (User, bool, error) {
+	username, err := validateCredentials(username, password)
+	if err != nil {
+		return User{}, false, err
+	}
+	hash, err := hashPassword(password)
+	if err != nil {
+		return User{}, false, err
+	}
+	user := User{
+		ID:           newUID(),
+		Username:     username,
+		PasswordHash: hash,
+		CreatedAt:    s.now().UTC(),
+		IsAdmin:      true,
+	}
+	return s.db.UpsertAdmin(ctx, user)
+}
+
+func (s *Service) AuthSettings(ctx context.Context, defaults AuthSettings) (AuthSettings, error) {
+	return s.db.AuthSettings(ctx, defaults)
+}
+
+func (s *Service) PutAuthSettings(ctx context.Context, settings AuthSettings) error {
+	return s.db.PutAuthSettings(ctx, settings)
+}
+
+func (s *Service) CreateRegistrationInvites(ctx context.Context, name string, count, maxUses int, expiresAt time.Time, createdBy string) ([]CreatedInvite, error) {
+	return s.db.CreateRegistrationInvites(ctx, name, count, maxUses, expiresAt, createdBy)
+}
+
+func (s *Service) ListRegistrationInvites(ctx context.Context, limit int) ([]RegistrationInvite, error) {
+	return s.db.ListRegistrationInvites(ctx, limit)
+}
+
+func (s *Service) SetRegistrationInviteDisabled(ctx context.Context, id int64, disabled bool) error {
+	return s.db.SetRegistrationInviteDisabled(ctx, id, disabled)
+}
+
+func (s *Service) DeleteRegistrationInvite(ctx context.Context, id int64) error {
+	return s.db.DeleteRegistrationInvite(ctx, id)
+}
+
 // provisionExternalUser creates a local, federated-only account for a first-seen
 // identity, retrying on the rare generated-username collision. The account gets
 // an unusable random password hash so it can never be password-logged-into until
 // the user explicitly sets one, yet still flows through the constant-time verify
 // path. A request that loses a race to create the same identity adopts the
 // winner's account instead of failing.
-func (s *Service) provisionExternalUser(ctx context.Context, provider, subject, displayName string) (User, error) {
+func (s *Service) provisionExternalUser(ctx context.Context, provider, subject, displayName, inviteCode string, requireInvite bool) (User, error) {
 	hash, err := unusablePasswordHash()
 	if err != nil {
 		return User{}, err
@@ -282,7 +375,11 @@ func (s *Service) provisionExternalUser(ctx context.Context, provider, subject, 
 			PasswordHash: hash,
 			CreatedAt:    s.now().UTC(),
 		}
-		err = s.db.CreateUserWithIdentity(ctx, user, provider, subject)
+		if requireInvite {
+			err = s.db.CreateUserWithIdentityAndInvite(ctx, user, provider, subject, inviteCode, s.now().UTC())
+		} else {
+			err = s.db.CreateUserWithIdentity(ctx, user, provider, subject)
+		}
 		switch {
 		case err == nil:
 			return user, nil

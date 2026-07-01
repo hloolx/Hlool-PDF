@@ -15,6 +15,11 @@
 | `HLOOL_BEHIND_PROXY` | `false` | 信任上游反代的 `X-Forwarded-Proto`/`X-Forwarded-For`（TLS 由反代终结时设为 1） |
 | `HLOOL_TLS_CERT` / `HLOOL_TLS_KEY` | 空 | 同时设置则启用内置 HTTPS 监听 |
 | `HLOOL_SECURE_COOKIES` | 自动 | 会话 Cookie 的 Secure 标记。默认在 TLS 或反代下为 true；本地 http 调试自动为 false。可显式覆盖 |
+| `HLOOL_ADMIN_USERNAME` / `HLOOL_ADMIN_PASSWORD` | 空 | 启动时创建或刷新管理员账号（两者必须同时设置）。管理员登录后可访问 `/admin` |
+| `HLOOL_ALLOW_REGISTER` | `true` | 注册总开关的启动默认值；后台保存后以 SQLite 中的设置为准 |
+| `HLOOL_REQUIRE_INVITE` | `false` | 是否要求邀请码注册的启动默认值；后台保存后以 SQLite 中的设置为准 |
+| `HLOOL_ALLOW_THIRD_PARTY_REGISTER` | `true` | 第三方身份首次自动开号的启动默认值；已有外部身份登录不受影响 |
+| `HLOOL_ALLOW_GUEST` | `true` | 是否允许临时游客身份；后台保存后以 SQLite 中的设置为准 |
 | `HLOOL_MAX_PROCESS_BODY_MB` | `220` | `/api/process`、`/api/compose` 的请求体上限 |
 | `HLOOL_MAX_STAMP_MB` | `20` | 单个印章图片上限 |
 | `HLOOL_MAX_CONCURRENT_JOBS` | CPU 核数 | 同时处理的重型 PDF 任务上限（盖章/拼接/图片转 PDF）；超出的请求短暂排队，仍无空位则返回 503。**小内存机器请调低**（每个任务可能瞬时占用源文件数倍内存） |
@@ -82,6 +87,8 @@
    `HLOOL_ALLOWED_HOSTS=your.domain`。代理转发 `Host` 与 `X-Forwarded-Proto`。
 2. 或直接内置 TLS：设 `HLOOL_TLS_CERT`/`HLOOL_TLS_KEY`。
 3. 全程 HTTPS；HSTS 会自动开启。
+4. 首次部署建议设置 `HLOOL_ADMIN_USERNAME`/`HLOOL_ADMIN_PASSWORD` 创建管理员，登录后进入 `/admin`
+   配置注册、邀请码、第三方注册和游客开关。确认管理员可登录后，可移除或妥善保管这两个环境变量。
 
 ## S3 桶硬化（必做）
 

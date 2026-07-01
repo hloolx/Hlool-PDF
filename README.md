@@ -273,6 +273,10 @@ docker run -d `
 | `HLOOL_BEHIND_PROXY` | `false` | 位于 HTTPS 反代之后时设为 `1`，服务会信任 `X-Forwarded-Proto`。 |
 | `HLOOL_TLS_CERT` / `HLOOL_TLS_KEY` | 空 | 同时设置后启用内置 HTTPS。 |
 | `HLOOL_SECURE_COOKIES` | 自动 | 会话 Cookie 的 `Secure` 标记。TLS 或反代下自动启用。 |
+| `HLOOL_ADMIN_USERNAME` / `HLOOL_ADMIN_PASSWORD` | 空 | 启动时创建或刷新管理员账号，登录后可访问 `/admin`。 |
+| `HLOOL_ALLOW_REGISTER` | `true` | 注册总开关的启动默认值；后台保存后以 SQLite 设置为准。 |
+| `HLOOL_REQUIRE_INVITE` | `false` | 是否要求邀请码注册的启动默认值；后台保存后以 SQLite 设置为准。 |
+| `HLOOL_ALLOW_THIRD_PARTY_REGISTER` | `true` | 第三方身份首次自动开号的启动默认值。 |
 | `HLOOL_ALLOW_GUEST` | `true` | 是否允许临时身份。临时身份约 24 小时后连同印章库一起清除。 |
 | `HLOOL_MAX_PROCESS_BODY_MB` | `220` | `/api/process`、`/api/compose`、`/api/image-to-pdf` 上传体积上限。 |
 | `HLOOL_MAX_STAMP_MB` | `20` | 单个印章图片上传体积上限。 |

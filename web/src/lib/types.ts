@@ -37,6 +37,14 @@ export type AuthUser = {
   username: string
   /** 临时身份（未注册）：可正常使用，但库会在约 24 小时后清除。 */
   isGuest?: boolean
+  isAdmin?: boolean
+}
+
+export type AuthConfig = {
+  registerEnabled: boolean
+  inviteRequired: boolean
+  thirdPartyRegisterEnabled: boolean
+  guestEnabled: boolean
 }
 
 /** 跟随账号、存到服务端 /api/settings 的用户库偏好（与设备无关的部分）。 */

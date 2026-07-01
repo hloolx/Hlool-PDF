@@ -14,12 +14,12 @@ import (
 
 // Sentinel errors from the user/session store.
 var (
-	ErrUsernameTaken     = errors.New("username already taken")
-	ErrUserNotFound      = errors.New("user not found")
-	ErrSessionInvalid    = errors.New("session invalid or expired")
-	ErrNotGuest          = errors.New("account is not an upgradeable guest")
-	ErrIdentityNotFound  = errors.New("identity not found")
-	ErrIdentityLinked    = errors.New("identity already linked to an account")
+	ErrUsernameTaken    = errors.New("username already taken")
+	ErrUserNotFound     = errors.New("user not found")
+	ErrSessionInvalid   = errors.New("session invalid or expired")
+	ErrNotGuest         = errors.New("account is not an upgradeable guest")
+	ErrIdentityNotFound = errors.New("identity not found")
+	ErrIdentityLinked   = errors.New("identity already linked to an account")
 )
 
 // User is a registered account, or a temporary guest (IsGuest). ID doubles as
@@ -32,6 +32,7 @@ type User struct {
 	PasswordHash string
 	CreatedAt    time.Time
 	IsGuest      bool
+	IsAdmin      bool
 }
 
 // DB is the SQLite-backed user and session store.
@@ -81,7 +82,8 @@ func (d *DB) migrate() error {
 			username      TEXT NOT NULL,
 			password_hash TEXT NOT NULL,
 			created_at    INTEGER NOT NULL,
-			is_guest      INTEGER NOT NULL DEFAULT 0
+			is_guest      INTEGER NOT NULL DEFAULT 0,
+			is_admin      INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users (username COLLATE NOCASE)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
@@ -102,6 +104,25 @@ func (d *DB) migrate() error {
 			PRIMARY KEY (provider, subject)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_identities_user ON identities (user_id)`,
+		`CREATE TABLE IF NOT EXISTS app_settings (
+			key        TEXT PRIMARY KEY,
+			value      TEXT NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS registration_invites (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			code_hash  TEXT NOT NULL UNIQUE,
+			code_hint  TEXT NOT NULL,
+			name       TEXT NOT NULL,
+			max_uses   INTEGER NOT NULL,
+			used_count INTEGER NOT NULL DEFAULT 0,
+			expires_at INTEGER NOT NULL DEFAULT 0,
+			disabled   INTEGER NOT NULL DEFAULT 0,
+			created_by TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			used_at    INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_registration_invites_created ON registration_invites (created_at DESC)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := d.db.Exec(stmt); err != nil {
@@ -112,7 +133,13 @@ func (d *DB) migrate() error {
 	if err := d.ensureColumn("users", "is_guest", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := d.ensureColumn("users", "is_admin", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	if _, err := d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_users_guest ON users (is_guest, created_at)`); err != nil {
+		return err
+	}
+	if _, err := d.db.Exec(`CREATE INDEX IF NOT EXISTS idx_users_admin ON users (is_admin)`); err != nil {
 		return err
 	}
 	return nil
@@ -153,9 +180,13 @@ func (d *DB) CreateUser(ctx context.Context, u User) error {
 	if u.IsGuest {
 		guest = 1
 	}
+	admin := 0
+	if u.IsAdmin {
+		admin = 1
+	}
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO users (id, username, password_hash, created_at, is_guest) VALUES (?, ?, ?, ?, ?)`,
-		u.ID, u.Username, u.PasswordHash, u.CreatedAt.Unix(), guest,
+		`INSERT INTO users (id, username, password_hash, created_at, is_guest, is_admin) VALUES (?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Username, u.PasswordHash, u.CreatedAt.Unix(), guest, admin,
 	)
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return ErrUsernameTaken
@@ -177,9 +208,13 @@ func (d *DB) CreateUserWithIdentity(ctx context.Context, u User, provider, subje
 	if u.IsGuest {
 		guest = 1
 	}
+	admin := 0
+	if u.IsAdmin {
+		admin = 1
+	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO users (id, username, password_hash, created_at, is_guest) VALUES (?, ?, ?, ?, ?)`,
-		u.ID, u.Username, u.PasswordHash, u.CreatedAt.Unix(), guest,
+		`INSERT INTO users (id, username, password_hash, created_at, is_guest, is_admin) VALUES (?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Username, u.PasswordHash, u.CreatedAt.Unix(), guest, admin,
 	); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return ErrUsernameTaken
@@ -216,7 +251,7 @@ func (d *DB) LinkIdentity(ctx context.Context, provider, subject, userID string,
 // ErrIdentityNotFound when the identity is unknown.
 func (d *DB) UserByIdentity(ctx context.Context, provider, subject string) (User, error) {
 	row := d.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.password_hash, u.created_at, u.is_guest
+		`SELECT u.id, u.username, u.password_hash, u.created_at, u.is_guest, u.is_admin
 		   FROM identities i JOIN users u ON u.id = i.user_id
 		  WHERE i.provider = ? AND i.subject = ?`,
 		provider, subject,
@@ -257,7 +292,7 @@ func (d *DB) UpgradeGuest(ctx context.Context, id, username, passwordHash string
 // UserByUsername looks up an account by case-insensitive username.
 func (d *DB) UserByUsername(ctx context.Context, username string) (User, error) {
 	row := d.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, created_at, is_guest FROM users WHERE username = ? COLLATE NOCASE`,
+		`SELECT id, username, password_hash, created_at, is_guest, is_admin FROM users WHERE username = ? COLLATE NOCASE`,
 		username,
 	)
 	return scanUser(row)
@@ -266,7 +301,7 @@ func (d *DB) UserByUsername(ctx context.Context, username string) (User, error) 
 // UserByID looks up an account by id.
 func (d *DB) UserByID(ctx context.Context, id string) (User, error) {
 	row := d.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, created_at, is_guest FROM users WHERE id = ?`, id,
+		`SELECT id, username, password_hash, created_at, is_guest, is_admin FROM users WHERE id = ?`, id,
 	)
 	return scanUser(row)
 }
@@ -284,7 +319,7 @@ func (d *DB) CreateSession(ctx context.Context, tokenHash, userID string, create
 // unknown sessions yield ErrSessionInvalid.
 func (d *DB) SessionUser(ctx context.Context, tokenHash string, now time.Time) (User, error) {
 	row := d.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.password_hash, u.created_at, u.is_guest
+		`SELECT u.id, u.username, u.password_hash, u.created_at, u.is_guest, u.is_admin
 		   FROM sessions s JOIN users u ON u.id = s.user_id
 		  WHERE s.token_hash = ? AND s.expires_at > ?`,
 		tokenHash, now.Unix(),
@@ -337,8 +372,8 @@ func (d *DB) DeleteUser(ctx context.Context, id string) error {
 func scanUser(row *sql.Row) (User, error) {
 	var u User
 	var createdAt int64
-	var isGuest int
-	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &createdAt, &isGuest); err != nil {
+	var isGuest, isAdmin int
+	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &createdAt, &isGuest, &isAdmin); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, ErrUserNotFound
 		}
@@ -346,5 +381,6 @@ func scanUser(row *sql.Row) (User, error) {
 	}
 	u.CreatedAt = time.Unix(createdAt, 0).UTC()
 	u.IsGuest = isGuest != 0
+	u.IsAdmin = isAdmin != 0
 	return u, nil
 }

@@ -6,6 +6,7 @@ import { ToastHost } from '../ui/ToastHost'
 import { bootWorkspace } from '../features/workspace/boot'
 import { AuthScreen } from '../features/auth/AuthScreen'
 import { useAuth } from '../features/auth/useAuth'
+import { AdminPage } from '../features/admin/AdminPage'
 
 // 主工作区单独切包（pdfjs / 画布等重依赖随之离开入口包）。
 const Workspace = lazy(() => import('./Workspace'))
@@ -21,6 +22,7 @@ function FullScreenLoader() {
 export function App() {
   const theme = useEditorStore((state) => state.theme)
   const status = useAuth((state) => state.status)
+  const user = useAuth((state) => state.user)
   const promptLogin = useAuth((state) => state.promptLogin)
   const init = useAuth((state) => state.init)
 
@@ -50,6 +52,25 @@ export function App() {
         <AuthScreen />
         <div className="fixed bottom-4 right-4 z-[60]">
           <ToastHost />
+        </div>
+      </TipProvider>
+    )
+  }
+
+  if (window.location.pathname === '/admin') {
+    if (user?.isAdmin) return <AdminPage />
+    return (
+      <TipProvider>
+        <div className="flex h-full flex-col items-center justify-center gap-3 bg-canvas px-4 text-center">
+          <p className="text-base font-semibold">需要管理员权限</p>
+          <p className="max-w-[360px] text-sm text-ink-muted">当前账号不能访问后台。</p>
+          <button
+            type="button"
+            className="h-8 rounded-lg border border-line bg-panel px-3 text-[13px] font-medium hover:bg-sunken"
+            onClick={() => (window.location.href = '/')}
+          >
+            返回工作区
+          </button>
         </div>
       </TipProvider>
     )

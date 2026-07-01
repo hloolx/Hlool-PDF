@@ -64,6 +64,20 @@ func main() {
 	}
 	defer db.Close()
 	authSvc := auth.NewService(db, auth.Options{SecureCookies: cfg.SecureCookies})
+	if cfg.AdminUsername != "" || cfg.AdminPassword != "" {
+		if cfg.AdminUsername == "" || cfg.AdminPassword == "" {
+			log.Fatal("HLOOL_ADMIN_USERNAME and HLOOL_ADMIN_PASSWORD must be set together")
+		}
+		user, created, err := authSvc.EnsureAdmin(context.Background(), cfg.AdminUsername, cfg.AdminPassword)
+		if err != nil {
+			log.Fatalf("bootstrap admin: %v", err)
+		}
+		if created {
+			log.Printf("admin account %q created", user.Username)
+		} else {
+			log.Printf("admin account %q refreshed", user.Username)
+		}
+	}
 
 	lib, backend, err := buildLibrary(cfg)
 	if err != nil {
@@ -104,11 +118,17 @@ func main() {
 
 	srv := &http.Server{
 		Handler: server.New(authSvc, lib, webFS, server.Options{
-			CORSOrigins:         cfg.CORSOrigins,
-			AllowedHosts:        cfg.AllowedHosts,
-			BehindProxy:         cfg.BehindProxy,
-			HSTS:                cfg.TLSEnabled() || cfg.BehindProxy,
-			AllowGuest:          cfg.AllowGuest,
+			CORSOrigins:  cfg.CORSOrigins,
+			AllowedHosts: cfg.AllowedHosts,
+			BehindProxy:  cfg.BehindProxy,
+			HSTS:         cfg.TLSEnabled() || cfg.BehindProxy,
+			AuthDefaults: auth.AuthSettings{
+				RegisterEnabled:           cfg.AllowRegister,
+				InviteRequired:            cfg.RequireInvite,
+				ThirdPartyRegisterEnabled: cfg.AllowThirdPartyRegister,
+				GuestEnabled:              cfg.AllowGuest,
+			},
+			AuthDefaultsSet:     true,
 			MaxProcessBodyBytes: cfg.MaxProcessBodyBytes,
 			MaxStampBytes:       cfg.MaxStampBytes,
 			MaxConcurrentJobs:   cfg.MaxConcurrentJobs,
