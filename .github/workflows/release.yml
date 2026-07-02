@@ -76,7 +76,9 @@ jobs:
 
             mkdir -p "${outdir}"
             GOOS="${goos}" GOARCH="${goarch}" go build -tags embed -trimpath -ldflags="-s -w" -o "${outdir}/${binary}" ./cmd/hlool-pdf
-            cp README.md VERSION "${outdir}/"
+            cp README.md DEPLOY.md LICENSE VERSION "${outdir}/"
+            cp deploy/hlool-pdf.env.example "${outdir}/hlool-pdf.env.example"
+            cp deploy/hlool-pdf.env.example "${outdir}/hlool-pdf.env"
 
             if [[ "${archive}" == "zip" ]]; then
               (cd dist/package && zip -9 -r "../release/${package}.zip" "${package}")
@@ -170,6 +172,10 @@ jobs:
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER}/hlool-pdf:${GITHUB_REF_NAME}"
           NOTES="$(cat <<EOF
           Hlool PDF ${VERSION} multi-platform release with Windows, Linux, and macOS packages for amd64 and arm64.
+
+          Platform packages include Baota-friendly env files at the package root:
+          - hlool-pdf.env
+          - hlool-pdf.env.example
 
           Docker image:
 

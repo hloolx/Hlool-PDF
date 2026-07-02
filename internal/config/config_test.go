@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestLoadDefaults(t *testing.T) {
 	for _, k := range s3EnvKeys {
@@ -74,6 +78,84 @@ func TestLoadSecureCookiesWithProxy(t *testing.T) {
 	}
 	if !cfg.SecureCookies {
 		t.Fatal("secure cookies should be on behind a proxy")
+	}
+}
+
+func TestLoadExplicitEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "hlool-pdf.env")
+	if err := os.WriteFile(envPath, []byte("HLOOL_ADDR=0.0.0.0:9090\nHLOOL_DATA_DIR=./data\nHLOOL_ALLOW_GUEST=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HLOOL_ENV_FILE", envPath)
+	t.Setenv("HLOOL_ADDR", "")
+	t.Setenv("HLOOL_DATA_DIR", "")
+	t.Setenv("HLOOL_ALLOW_GUEST", "")
+	t.Setenv("HLOOL_S3_BUCKET", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Addr != "0.0.0.0:9090" {
+		t.Fatalf("addr from env file = %q", cfg.Addr)
+	}
+	if filepath.Base(cfg.DataDir) != "data" {
+		t.Fatalf("data dir from env file = %q", cfg.DataDir)
+	}
+	if cfg.AllowGuest {
+		t.Fatal("guest mode should be disabled by env file")
+	}
+}
+
+func TestOSVariablesOverrideEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "hlool-pdf.env")
+	if err := os.WriteFile(envPath, []byte("HLOOL_ADDR=0.0.0.0:9090\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HLOOL_ENV_FILE", envPath)
+	t.Setenv("HLOOL_ADDR", "127.0.0.1:7070")
+	t.Setenv("HLOOL_S3_BUCKET", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Addr != "127.0.0.1:7070" {
+		t.Fatalf("OS env should override env file, got %q", cfg.Addr)
+	}
+}
+
+func TestLoadImplicitEnvFileFromWorkingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hlool-pdf.env"), []byte("HLOOL_ADDR=0.0.0.0:8080\nHLOOL_DATA_DIR=./data\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(wd)
+	})
+	t.Setenv("HLOOL_ENV_FILE", "")
+	t.Setenv("HLOOL_ADDR", "")
+	t.Setenv("HLOOL_DATA_DIR", "")
+	t.Setenv("HLOOL_S3_BUCKET", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Addr != "0.0.0.0:8080" {
+		t.Fatalf("addr from implicit env file = %q", cfg.Addr)
+	}
+	if cfg.DataDir != filepath.Join(dir, "data") {
+		t.Fatalf("data dir from implicit env file = %q, want %q", cfg.DataDir, filepath.Join(dir, "data"))
 	}
 }
 

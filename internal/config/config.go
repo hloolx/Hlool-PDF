@@ -109,35 +109,40 @@ const (
 // validates it. It never reads command-line flags; the caller may override
 // individual fields afterwards.
 func Load() (Config, error) {
+	envs, err := loadEnvFiles()
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
-		Addr:        envOr("HLOOL_ADDR", "127.0.0.1:8088"),
-		DataDir:     envOr("HLOOL_DATA_DIR", defaultDataDir()),
-		OpenBrowser: envBool("HLOOL_OPEN_BROWSER", false),
+		Addr:        envOr(envs, "HLOOL_ADDR", "127.0.0.1:8088"),
+		DataDir:     envOr(envs, "HLOOL_DATA_DIR", defaultDataDir()),
+		OpenBrowser: envBool(envs, "HLOOL_OPEN_BROWSER", false),
 
-		AllowedHosts: splitCSV(os.Getenv("HLOOL_ALLOWED_HOSTS")),
-		CORSOrigins:  splitCSV(os.Getenv("HLOOL_CORS_ORIGINS")),
+		AllowedHosts: splitCSV(envValue(envs, "HLOOL_ALLOWED_HOSTS")),
+		CORSOrigins:  splitCSV(envValue(envs, "HLOOL_CORS_ORIGINS")),
 
-		TLSCert:                 strings.TrimSpace(os.Getenv("HLOOL_TLS_CERT")),
-		TLSKey:                  strings.TrimSpace(os.Getenv("HLOOL_TLS_KEY")),
-		BehindProxy:             envBool("HLOOL_BEHIND_PROXY", false),
-		AllowGuest:              envBool("HLOOL_ALLOW_GUEST", true),
-		AllowRegister:           envBool("HLOOL_ALLOW_REGISTER", true),
-		RequireInvite:           envBool("HLOOL_REQUIRE_INVITE", false),
-		AllowThirdPartyRegister: envBool("HLOOL_ALLOW_THIRD_PARTY_REGISTER", true),
-		AdminUsername:           strings.TrimSpace(os.Getenv("HLOOL_ADMIN_USERNAME")),
-		AdminPassword:           os.Getenv("HLOOL_ADMIN_PASSWORD"),
+		TLSCert:                 strings.TrimSpace(envValue(envs, "HLOOL_TLS_CERT")),
+		TLSKey:                  strings.TrimSpace(envValue(envs, "HLOOL_TLS_KEY")),
+		BehindProxy:             envBool(envs, "HLOOL_BEHIND_PROXY", false),
+		AllowGuest:              envBool(envs, "HLOOL_ALLOW_GUEST", true),
+		AllowRegister:           envBool(envs, "HLOOL_ALLOW_REGISTER", true),
+		RequireInvite:           envBool(envs, "HLOOL_REQUIRE_INVITE", false),
+		AllowThirdPartyRegister: envBool(envs, "HLOOL_ALLOW_THIRD_PARTY_REGISTER", true),
+		AdminUsername:           strings.TrimSpace(envValue(envs, "HLOOL_ADMIN_USERNAME")),
+		AdminPassword:           envValue(envs, "HLOOL_ADMIN_PASSWORD"),
 
-		MaxProcessBodyBytes: envInt64("HLOOL_MAX_PROCESS_BODY_MB", defaultMaxProcessBodyMB) << 20,
-		MaxStampBytes:       envInt64("HLOOL_MAX_STAMP_MB", defaultMaxStampMB) << 20,
-		MaxConcurrentJobs:   int(envInt64("HLOOL_MAX_CONCURRENT_JOBS", int64(runtime.GOMAXPROCS(0)))),
+		MaxProcessBodyBytes: envInt64(envs, "HLOOL_MAX_PROCESS_BODY_MB", defaultMaxProcessBodyMB) << 20,
+		MaxStampBytes:       envInt64(envs, "HLOOL_MAX_STAMP_MB", defaultMaxStampMB) << 20,
+		MaxConcurrentJobs:   int(envInt64(envs, "HLOOL_MAX_CONCURRENT_JOBS", int64(runtime.GOMAXPROCS(0)))),
 
 		S3: S3Config{
-			Bucket:         strings.TrimSpace(os.Getenv("HLOOL_S3_BUCKET")),
-			Region:         strings.TrimSpace(os.Getenv("HLOOL_S3_REGION")),
-			Endpoint:       strings.TrimSpace(os.Getenv("HLOOL_S3_ENDPOINT")),
-			Prefix:         strings.Trim(strings.TrimSpace(os.Getenv("HLOOL_S3_PREFIX")), "/"),
-			ForcePathStyle: envBool("HLOOL_S3_FORCE_PATH_STYLE", false),
-			KMSKeyID:       strings.TrimSpace(os.Getenv("HLOOL_S3_KMS_KEY_ID")),
+			Bucket:         strings.TrimSpace(envValue(envs, "HLOOL_S3_BUCKET")),
+			Region:         strings.TrimSpace(envValue(envs, "HLOOL_S3_REGION")),
+			Endpoint:       strings.TrimSpace(envValue(envs, "HLOOL_S3_ENDPOINT")),
+			Prefix:         strings.Trim(strings.TrimSpace(envValue(envs, "HLOOL_S3_PREFIX")), "/"),
+			ForcePathStyle: envBool(envs, "HLOOL_S3_FORCE_PATH_STYLE", false),
+			KMSKeyID:       strings.TrimSpace(envValue(envs, "HLOOL_S3_KMS_KEY_ID")),
 		},
 	}
 
@@ -153,12 +158,12 @@ func Load() (Config, error) {
 		if cfg.S3.Region == "" {
 			cfg.S3.Region = "auto"
 		}
-		sse, err := normalizeSSE(os.Getenv("HLOOL_S3_SSE"), cfg.S3.Endpoint != "")
+		sse, err := normalizeSSE(envValue(envs, "HLOOL_S3_SSE"), cfg.S3.Endpoint != "")
 		if err != nil {
 			return Config{}, err
 		}
 		cfg.S3.SSE = sse
-		mode, err := checksumWhenSupported(os.Getenv("HLOOL_S3_CHECKSUM"))
+		mode, err := checksumWhenSupported(envValue(envs, "HLOOL_S3_CHECKSUM"))
 		if err != nil {
 			return Config{}, err
 		}
@@ -167,7 +172,7 @@ func Load() (Config, error) {
 
 	// Secure cookies whenever the connection is (or terminates as) HTTPS.
 	cfg.SecureCookies = cfg.TLSEnabled() || cfg.BehindProxy
-	if v, ok := envBoolOptional("HLOOL_SECURE_COOKIES"); ok {
+	if v, ok := envBoolOptional(envs, "HLOOL_SECURE_COOKIES"); ok {
 		cfg.SecureCookies = v
 	}
 
@@ -184,30 +189,30 @@ func defaultDataDir() string {
 	return filepath.Join(".", ".hlool-data")
 }
 
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+func envOr(envs fileEnv, key, fallback string) string {
+	if v := strings.TrimSpace(envValue(envs, key)); v != "" {
 		return v
 	}
 	return fallback
 }
 
-func envInt64(key string, fallback int64) int64 {
-	v, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(key)), 10, 64)
+func envInt64(envs fileEnv, key string, fallback int64) int64 {
+	v, err := strconv.ParseInt(strings.TrimSpace(envValue(envs, key)), 10, 64)
 	if err != nil || v <= 0 {
 		return fallback
 	}
 	return v
 }
 
-func envBool(key string, fallback bool) bool {
-	if v, ok := envBoolOptional(key); ok {
+func envBool(envs fileEnv, key string, fallback bool) bool {
+	if v, ok := envBoolOptional(envs, key); ok {
 		return v
 	}
 	return fallback
 }
 
-func envBoolOptional(key string) (bool, bool) {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+func envBoolOptional(envs fileEnv, key string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(envValue(envs, key))) {
 	case "1", "true", "yes", "on":
 		return true, true
 	case "0", "false", "no", "off":

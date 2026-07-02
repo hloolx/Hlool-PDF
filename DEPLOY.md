@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `HLOOL_ADDR` | `127.0.0.1:8088` | HTTP 监听地址（可用 `-addr` 覆盖） |
 | `HLOOL_DATA_DIR` | 用户配置目录/hlool-pdf | SQLite 用户库 + 本地存储后端的数据目录（可用 `-data-dir` 覆盖） |
-| `HLOOL_ALLOWED_HOSTS` | 空 | Host 头白名单（逗号分隔，防 DNS rebinding）。**生产必须设置**；空=放行任意 Host |
+| `HLOOL_ALLOWED_HOSTS` | 空 | Host 头白名单（逗号分隔，防 DNS rebinding）。空=放行任意 Host，适合直接 IP、宝塔和临时部署；有固定域名后可再收紧 |
 | `HLOOL_CORS_ORIGINS` | 空 | 允许的跨域来源（逗号分隔；一般同源部署留空即可） |
 | `HLOOL_BEHIND_PROXY` | `false` | 信任上游反代的 `X-Forwarded-Proto`/`X-Forwarded-For`（TLS 由反代终结时设为 1） |
 | `HLOOL_TLS_CERT` / `HLOOL_TLS_KEY` | 空 | 同时设置则启用内置 HTTPS 监听 |
@@ -81,14 +81,37 @@
 - 当前未内置任何具体 Provider（Google/GitHub/SAML…），避免在缺少密钥配置时塞入死代码；
   需要时按上面四步插入，会话与越权防护自动复用。
 
-## 推荐部署形态
+## 宝塔 / 面板二进制部署
 
-1. **反向代理终结 TLS**（Nginx/Caddy）转发到本服务，设 `HLOOL_BEHIND_PROXY=1`、
-   `HLOOL_ALLOWED_HOSTS=your.domain`。代理转发 `Host` 与 `X-Forwarded-Proto`。
-2. 或直接内置 TLS：设 `HLOOL_TLS_CERT`/`HLOOL_TLS_KEY`。
-3. 全程 HTTPS；HSTS 会自动开启。
-4. 首次部署建议设置 `HLOOL_ADMIN_USERNAME`/`HLOOL_ADMIN_PASSWORD` 创建管理员，登录后进入 `/admin`
-   配置注册、邀请码、第三方注册和游客开关。确认管理员可登录后，可移除或妥善保管这两个环境变量。
+从 v0.0.3 起，Release 里的平台压缩包会在根目录带上两个文件：
+
+- `hlool-pdf.env`：默认运行配置，程序启动时会自动读取。
+- `hlool-pdf.env.example`：同内容的示例备份。
+
+默认配置适合宝塔这类面板直接运行：
+
+```env
+HLOOL_ADDR=0.0.0.0:8080
+HLOOL_DATA_DIR=./data
+HLOOL_ALLOWED_HOSTS=
+HLOOL_BEHIND_PROXY=0
+HLOOL_ALLOW_GUEST=0
+```
+
+也就是说，解压后在宝塔里把启动文件指向 `hlool-pdf`，再放行服务器安全组/防火墙的
+`8080` 端口，就可以访问：
+
+```text
+http://服务器IP:8080
+```
+
+如果要改端口，直接改同目录下的 `hlool-pdf.env`：
+
+```env
+HLOOL_ADDR=0.0.0.0:你的端口
+```
+
+首次访问会进入安装向导；远程初始化令牌会打印在程序日志里。
 
 ## S3 桶硬化（必做）
 
