@@ -1,4 +1,4 @@
-import { FileText, Stamp, Trash2 } from 'lucide-react'
+import { FileText, Stamp, Trash2, Sparkles } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import type { PDFFile } from '../../lib/types'
 import { activeConfig, useEditorStore } from '../../state/store'
@@ -23,11 +23,13 @@ export function DocumentPanel({ file }: { file: PDFFile }) {
       return {
         placementCount: config.placements.length,
         pageCoverage: new Set(config.placements.map((p) => p.pageNumber)).size,
-        seamEnabled: config.seamEnabled
+        seamEnabled: config.seamEnabled,
+        scanEnabled: config.scanEnabled ?? false
       }
     })
   )
   const setSeamEnabled = useEditorStore((state) => state.setSeamEnabled)
+  const setScanEnabled = useEditorStore((state) => state.setScanEnabled)
   const clearPlacements = useEditorStore((state) => state.clearPlacements)
   const select = useEditorStore((state) => state.select)
   const outputNameTemplate = useEditorStore((state) => state.outputNameTemplate)
@@ -85,6 +87,27 @@ export function DocumentPanel({ file }: { file: PDFFile }) {
           />
         </div>
         {!stampsReady && <p className="text-xs text-ink-muted">导入印章图片后可启用骑缝章。</p>}
+      </Section>
+
+      <Section title="扫描效果">
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-line px-2.5 py-2 text-[13px]">
+          <button
+            type="button"
+            className="flex-1 text-left transition-colors hover:text-accent disabled:pointer-events-none"
+            disabled={!summary.scanEnabled}
+            onClick={() => select({ kind: 'scan' })}
+            title={summary.scanEnabled ? '点击编辑扫描效果参数' : undefined}
+          >
+            <div className="flex items-center gap-1.5">
+              <Sparkles size={16} className="text-ink-muted" />
+              <span>扫描效果</span>
+            </div>
+            <span className="ml-1.5 text-xs text-ink-muted">
+              {summary.scanEnabled ? '已启用 · 点击编辑' : '让 PDF 看起来像打印扫描的'}
+            </span>
+          </button>
+          <Switch checked={summary.scanEnabled} onChange={(checked) => setScanEnabled(checked)} />
+        </div>
       </Section>
 
       <Section title="页面范围">

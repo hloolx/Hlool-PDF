@@ -3,6 +3,7 @@ import { useStore } from 'zustand'
 import { temporal } from 'zundo'
 import {
   DEFAULT_SEAM,
+  DEFAULT_SCAN,
   clamp,
   emptyConfig,
   type FileConfig,
@@ -107,6 +108,8 @@ export type EditorState = PersistedState & {
   clearPlacements: () => void
   setSeam: (patch: Partial<SeamConfig>) => void
   setSeamEnabled: (enabled: boolean) => void
+  setScanEnabled: (enabled: boolean) => void
+  setScanConfig: (patch: Partial<import('../lib/types').ScanConfig>) => void
   setConfig: (fileId: string, config: FileConfig) => void
   swapStamp: (oldId: string, newId: string) => void
 }
@@ -252,6 +255,7 @@ export const useEditorStore = create<EditorState>()(
             const placements = config.placements.filter((p) => p.stampId !== stampId)
             const seamUsesStamp = config.seam.stampId === stampId
             configs[fileId] = {
+              ...config,
               placements,
               seamEnabled: seamUsesStamp ? false : config.seamEnabled,
               seam: seamUsesStamp ? { ...config.seam, stampId: null } : config.seam
@@ -279,6 +283,7 @@ export const useEditorStore = create<EditorState>()(
             const placements = config.placements.filter((p) => !remove.has(p.stampId))
             const seamUsesStamp = config.seam.stampId ? remove.has(config.seam.stampId) : false
             configs[fileId] = {
+              ...config,
               placements,
               seamEnabled: seamUsesStamp ? false : config.seamEnabled,
               seam: seamUsesStamp ? { ...config.seam, stampId: null } : config.seam
@@ -418,6 +423,20 @@ export const useEditorStore = create<EditorState>()(
           return { ...patch, selection: enabled ? { kind: 'seam' } : state.selection?.kind === 'seam' ? null : state.selection }
         }),
 
+      setScanEnabled: (enabled) =>
+        set((state) => {
+          const patch = updateActiveConfig(state, (config) => ({ ...config, scanEnabled: enabled }))
+          return { ...patch, selection: enabled ? { kind: 'scan' } : state.selection?.kind === 'scan' ? null : state.selection }
+        }),
+
+      setScanConfig: (patch) =>
+        set((state) =>
+          updateActiveConfig(state, (config) => ({
+            ...config,
+            scanConfig: { ...(config.scanConfig ?? DEFAULT_SCAN), ...patch }
+          }))
+        ),
+
       setConfig: (fileId, config) =>
         set((state) => ({ configs: { ...state.configs, [fileId]: config } })),
 
@@ -531,7 +550,10 @@ export function stampLabel(state: EditorState, stamp: StampAsset): string {
 }
 
 export function hasConfig(config: FileConfig | undefined): boolean {
-  return Boolean(config && (config.placements.length > 0 || (config.seamEnabled && config.seam.stampId)))
+  // scanEnabled 也算「有配置」:批量生成不能跳过只开了扫描效果的文件。
+  return Boolean(
+    config && (config.placements.length > 0 || (config.seamEnabled && config.seam.stampId) || config.scanEnabled)
+  )
 }
 
 export function configuredFiles(state: EditorState): PDFFile[] {

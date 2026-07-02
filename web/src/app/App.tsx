@@ -1,15 +1,17 @@
 import { Suspense, lazy, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useEditorStore } from '../state/store'
+import { toast } from '../state/toasts'
 import { TipProvider } from '../ui/Tooltip'
 import { ToastHost } from '../ui/ToastHost'
 import { bootWorkspace } from '../features/workspace/boot'
 import { AuthScreen } from '../features/auth/AuthScreen'
 import { useAuth } from '../features/auth/useAuth'
-import { AdminPage } from '../features/admin/AdminPage'
 
 // 主工作区单独切包（pdfjs / 画布等重依赖随之离开入口包）。
 const Workspace = lazy(() => import('./Workspace'))
+// 管理台只有管理员访问 /admin 才需要,同样不进入口包。
+const AdminPage = lazy(() => import('../features/admin/AdminPage').then((m) => ({ default: m.AdminPage })))
 
 function FullScreenLoader() {
   return (
@@ -36,6 +38,18 @@ export function App() {
     void import('./Workspace')
   }, [init])
 
+  // OAuth 回调失败会带 ?authError= 跳回来。放在 App 层:无论落到登录页还是
+  // 游客工作区都能提示一次;长 TTL 撑过认证检查与分包加载。
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const authError = params.get('authError')
+    if (!authError) return
+    toast(authError, { kind: 'error', ttlMs: 10000 })
+    params.delete('authError')
+    const qs = params.toString()
+    window.history.replaceState(null, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname)
+  }, [])
+
   // Boot the library once a session is confirmed (guest, fresh login or cookie).
   useEffect(() => {
     if (status === 'authed') void bootWorkspace()
@@ -58,7 +72,13 @@ export function App() {
   }
 
   if (window.location.pathname === '/admin') {
-    if (user?.isAdmin) return <AdminPage />
+    if (user?.isAdmin) {
+      return (
+        <Suspense fallback={<FullScreenLoader />}>
+          <AdminPage />
+        </Suspense>
+      )
+    }
     return (
       <TipProvider>
         <div className="flex h-full flex-col items-center justify-center gap-3 bg-canvas px-4 text-center">

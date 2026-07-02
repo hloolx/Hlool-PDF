@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ImagePlus, Pencil, Trash2, X } from 'lucide-react'
+import { Check, ImagePlus, Pencil, Sparkles, Trash2, X } from 'lucide-react'
 import { cx } from '../../lib/cx'
 import type { StampAsset } from '../../lib/types'
 import { stampLabel, useEditorStore } from '../../state/store'
@@ -11,6 +11,7 @@ import { SectionTitle } from '../../ui/Section'
 import { useGhost } from '../placements/ghost'
 import { placeAtClientPoint } from '../placements/actions'
 import { deleteStampAction, deleteStampsAction, uploadStamps } from '../workspace/actions'
+import { MattingDialog } from './MattingDialog'
 
 const SELECT_THRESHOLD = 5
 
@@ -196,6 +197,7 @@ function ShelfItem({
       </div>
       <div className="absolute right-1 top-1 hidden gap-0.5 group-hover:flex">
         <StampEditPopover stamp={stamp} />
+        <MattingButton stamp={stamp} />
         <ConfirmButton
           size="sm"
           className="bg-panel/95 shadow-sm"
@@ -299,6 +301,51 @@ function StampEditPopover({ stamp }: { stamp: StampAsset }) {
         </Field>
       </PopoverContent>
     </Popover>
+  )
+}
+
+function MattingButton({ stamp }: { stamp: StampAsset }) {
+  const [open, setOpen] = useState(false)
+  const [originalFile, setOriginalFile] = useState<File | null>(null)
+
+  async function handleOpen() {
+    try {
+      const response = await fetch(stamp.url)
+      const blob = await response.blob()
+      const file = new File([blob], stamp.name, { type: blob.type })
+      setOriginalFile(file)
+      setOpen(true)
+    } catch {
+      // Ignore
+    }
+  }
+
+  async function handleAccept(blob: Blob, saveAsNew: boolean) {
+    const file = new File([blob], stamp.name.replace(/\.[^.]+$/, '') + '-透明.png', { type: 'image/png' })
+    if (saveAsNew) {
+      await uploadStamps([file])
+    } else {
+      // Replace existing stamp
+      await deleteStampAction(stamp)
+      await uploadStamps([file])
+    }
+  }
+
+  return (
+    <>
+      <IconButton size="sm" className="bg-panel/95 shadow-sm" title="AI 背景移除" onClick={handleOpen}>
+        <Sparkles size={15} />
+      </IconButton>
+      {originalFile && (
+        <MattingDialog
+          open={open}
+          onClose={() => setOpen(false)}
+          originalFile={originalFile}
+          originalUrl={stamp.url}
+          onAccept={handleAccept}
+        />
+      )}
+    </>
   )
 }
 

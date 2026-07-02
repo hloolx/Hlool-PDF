@@ -6,10 +6,13 @@ import { Button } from '../../ui/Button'
 import { Field, TextInput } from '../../ui/Field'
 import { Segmented } from '../../ui/Segmented'
 import { bootWorkspace } from '../workspace/boot'
+import { InstallWizard } from '../install/InstallWizard'
 import { fetchAuthConfig, login, register } from './api'
 import { useAuth } from './useAuth'
+import { EmailLogin } from './EmailLogin'
+import { OAuthButtons } from './OAuthButtons'
 
-type Mode = 'login' | 'register'
+type Mode = 'login' | 'register' | 'email'
 
 export function AuthScreen() {
   // 已登录（临时身份）主动打开时，可返回工作区；并默认停在“注册”页引导建号。
@@ -23,6 +26,8 @@ export function AuthScreen() {
   const [config, setConfig] = useState<AuthConfig | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // 实例未初始化时优先展示安装向导;「跳过」只对本次会话生效。
+  const [skipInstall, setSkipInstall] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -39,6 +44,16 @@ export function AuthScreen() {
       alive = false
     }
   }, [])
+
+  const emailOn = config?.emailLoginEnabled === true
+  const oauthProviders = config?.oauthProviders ?? []
+  const hasAltLogin = emailOn || oauthProviders.length > 0
+  const showInstall = config?.needsInstall === true && !skipInstall
+
+  // 配置加载后发现邮箱登录未开启而当前停在邮箱页：退回密码登录。
+  useEffect(() => {
+    if (config && config.emailLoginEnabled !== true && mode === 'email') setMode('login')
+  }, [config, mode])
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -65,8 +80,9 @@ export function AuthScreen() {
   }
 
   return (
-    <div className="flex h-full items-center justify-center bg-canvas px-4">
-      <div className="w-full max-w-[360px]">
+    // 安全居中:内容高于视口(手机横屏)时自动贴顶并可滚动,items-center 会把顶部裁到不可达。
+    <div className="flex h-full justify-center overflow-y-auto bg-canvas px-4">
+      <div className="my-auto w-full max-w-[360px] py-8">
         <div className="mb-6 flex flex-col items-center gap-2.5">
           <span className="anim-stamp-press relative flex size-12 -rotate-3 items-center justify-center rounded-2xl bg-accent text-lg font-bold text-white shadow-pop">
             印
@@ -77,20 +93,46 @@ export function AuthScreen() {
         </div>
 
         <div className="rounded-2xl border border-line bg-panel p-5 shadow-pop">
-          <Segmented
-            className="mb-4"
-            value={mode}
-            onChange={(m) => {
-              setMode(m)
-              setError('')
-            }}
-            options={[
-              { value: 'login', label: '登录' },
-              { value: 'register', label: '注册', disabled: config?.registerEnabled === false }
-            ]}
-          />
+          {showInstall ? (
+            <InstallWizard
+              tokenRequired={config?.installTokenRequired === true}
+              onDone={(user) => {
+                setAuthed(user)
+                void bootWorkspace()
+              }}
+              onSkip={() => setSkipInstall(true)}
+            />
+          ) : mode === 'email' ? (
+            <>
+              <div className="mb-4 flex items-center gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setMode('login')}>
+                  <ArrowLeft size={16} />
+                </Button>
+                <h2 className="text-sm font-medium">邮箱验证码登录</h2>
+              </div>
+              <EmailLogin
+                onSuccess={(user) => {
+                  setAuthed(user)
+                  void bootWorkspace()
+                }}
+              />
+            </>
+          ) : (
+            <>
+              <Segmented
+                className="mb-4"
+                value={mode}
+                onChange={(m) => {
+                  setMode(m)
+                  setError('')
+                }}
+                options={[
+                  { value: 'login', label: '登录' },
+                  { value: 'register', label: '注册', disabled: config?.registerEnabled === false }
+                ]}
+              />
 
-          <form className="grid gap-3" onSubmit={submit}>
+              <form className="grid gap-3" onSubmit={submit}>
             <Field label="用户名">
               <TextInput
                 className="h-10 px-3"
@@ -141,7 +183,28 @@ export function AuthScreen() {
               {mode === 'login' ? '登录' : '注册并登录'}
             </Button>
           </form>
-        </div>
+
+          {hasAltLogin && (
+            <>
+              <div className="my-4 flex items-center gap-2">
+                <div className="h-px flex-1 bg-line" />
+                <span className="text-xs text-ink-muted">或</span>
+                <div className="h-px flex-1 bg-line" />
+              </div>
+
+              <div className="grid gap-2">
+                {emailOn && (
+                  <Button variant="ghost" onClick={() => setMode('email')}>
+                    邮箱验证码登录
+                  </Button>
+                )}
+                <OAuthButtons providers={oauthProviders} />
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
 
         {canDismiss && (
           <button

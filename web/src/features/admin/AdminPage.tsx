@@ -17,6 +17,7 @@ import {
   type AdminSettings,
   type RegistrationInvite
 } from './api'
+import { ProvidersPanel } from './ProvidersPanel'
 
 const fallbackSettings: AdminSettings = {
   registerEnabled: true,
@@ -125,7 +126,10 @@ export function AdminPage() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-auto px-4 py-4">
-        <div className="mx-auto grid max-w-6xl gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+        <div className="mx-auto grid max-w-6xl gap-4">
+          <ProvidersPanel />
+
+          <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
           <section className="h-fit rounded-lg border border-line bg-panel">
             <div className="border-b border-line px-4 py-3">
               <h2 className="text-[13px] font-semibold">访问开关</h2>
@@ -161,7 +165,7 @@ export function AdminPage() {
           </section>
 
           <section className="min-w-0 rounded-lg border border-line bg-panel">
-            <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
+            <div className="flex flex-col gap-2 border-b border-line px-4 py-3 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
                 <h2 className="text-[13px] font-semibold">邀请码</h2>
                 <p className="mt-0.5 text-xs text-ink-muted">明文只在创建后展示，列表保留尾号、用量和状态。</p>
@@ -173,7 +177,7 @@ export function AdminPage() {
             </div>
 
             <div className="grid gap-4 p-4">
-              <form className="grid gap-3 rounded-lg bg-sunken p-3 md:grid-cols-[minmax(180px,1fr)_120px_120px_140px_auto]" onSubmit={submitInvites}>
+              <form className="grid gap-3 rounded-lg bg-sunken p-3 sm:grid-cols-[minmax(180px,1fr)] md:grid-cols-[minmax(180px,1fr)_120px_120px_140px_auto]" onSubmit={submitInvites}>
                 <Field label="批次名称">
                   <TextInput value={form.name} onChange={(event) => setForm((value) => ({ ...value, name: event.currentTarget.value }))} />
                 </Field>
@@ -192,7 +196,7 @@ export function AdminPage() {
                     onChange={(expiresInDays) => setForm((value) => ({ ...value, expiresInDays: Math.round(expiresInDays) }))}
                   />
                 </Field>
-                <div className="flex items-end">
+                <div className="flex items-end sm:col-span-full md:col-span-1">
                   <Button type="submit" variant="primary" className="w-full" disabled={creating}>
                     {creating ? <Loader2 size={16} className="animate-spin" /> : <TicketPlus size={16} />}
                     生成
@@ -227,6 +231,7 @@ export function AdminPage() {
               <InviteTable invites={invites} onToggle={toggleInvite} onDelete={removeInvite} />
             </div>
           </section>
+          </div>
         </div>
       </main>
 
@@ -284,10 +289,10 @@ function InviteTable({
           <thead className="sticky top-0 bg-sunken text-xs text-ink-muted">
             <tr>
               <th className="px-3 py-2 font-medium">批次</th>
-              <th className="px-3 py-2 font-medium">尾号</th>
+              <th className="hidden px-3 py-2 font-medium sm:table-cell">尾号</th>
               <th className="px-3 py-2 font-medium">状态</th>
-              <th className="px-3 py-2 font-medium">用量</th>
-              <th className="px-3 py-2 font-medium">有效期</th>
+              <th className="hidden px-3 py-2 font-medium md:table-cell">用量</th>
+              <th className="hidden px-3 py-2 font-medium lg:table-cell">有效期</th>
               <th className="px-3 py-2 text-right font-medium">操作</th>
             </tr>
           </thead>
@@ -297,14 +302,14 @@ function InviteTable({
                 <td className="max-w-[220px] truncate px-3 py-2" title={invite.name}>
                   {invite.name}
                 </td>
-                <td className="px-3 py-2 font-mono text-xs tracking-wide">•••• {invite.codeHint}</td>
+                <td className="hidden px-3 py-2 font-mono text-xs tracking-wide sm:table-cell">•••• {invite.codeHint}</td>
                 <td className="px-3 py-2">
                   <StatusPill status={invite.status} disabled={invite.disabled} />
                 </td>
-                <td className="tnum px-3 py-2">
+                <td className="tnum hidden px-3 py-2 md:table-cell">
                   {invite.usedCount} / {invite.maxUses}
                 </td>
-                <td className="tnum px-3 py-2 text-ink-muted">{invite.expiresAt ? formatDate(invite.expiresAt) : '长期'}</td>
+                <td className="tnum hidden px-3 py-2 text-ink-muted lg:table-cell">{invite.expiresAt ? formatDate(invite.expiresAt) : '长期'}</td>
                 <td className="px-3 py-2">
                   <div className="flex justify-end gap-1">
                     <Button size="sm" variant="ghost" onClick={() => void onToggle(invite)}>

@@ -19,10 +19,12 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"hlool-pdf/internal/auth"
 	"hlool-pdf/internal/library"
+	"hlool-pdf/internal/providers"
 )
 
 const (
@@ -50,20 +52,29 @@ type Options struct {
 	MaxProcessBodyBytes int64
 	MaxStampBytes       int64
 	MaxConcurrentJobs   int
+	// SetupToken 是首次安装向导的远程初始化令牌(无管理员时由 main 生成并打进日志);
+	// 为空表示只允许本机完成初始化。
+	SetupToken string
 }
 
 // Server bundles the auth service, the pluggable library backend and the web UI.
 type Server struct {
-	auth         *auth.Service
-	lib          library.Store
-	webFS        fs.FS
-	opts         Options
-	jobSem       chan struct{} // bounds concurrent heavy PDF jobs (see limitJobs)
-	jobQueueWait time.Duration // how long a heavy request waits for a slot before 503
+	auth          *auth.Service
+	lib           library.Store
+	providerStore *providers.Store
+	webFS         fs.FS
+	opts          Options
+	jobSem        chan struct{} // bounds concurrent heavy PDF jobs (see limitJobs)
+	jobQueueWait  time.Duration // how long a heavy request waits for a slot before 503
+	oauthStates   *oauthStateStore
+	// newMailSender 为空时用真实 SMTP 客户端;测试注入假发信器。
+	newMailSender func(providers.Provider) mailSender
+	// installedFlag 是「已存在管理员」的正向缓存(见 needsInstall)。
+	installedFlag atomic.Bool
 }
 
 // New builds a Server.
-func New(authSvc *auth.Service, lib library.Store, webFS fs.FS, opts Options) *Server {
+func New(authSvc *auth.Service, lib library.Store, providerStore *providers.Store, webFS fs.FS, opts Options) *Server {
 	if opts.MaxProcessBodyBytes <= 0 {
 		opts.MaxProcessBodyBytes = 220 << 20
 	}
@@ -82,12 +93,14 @@ func New(authSvc *auth.Service, lib library.Store, webFS fs.FS, opts Options) *S
 		opts.AuthDefaults.GuestEnabled = opts.AllowGuest
 	}
 	return &Server{
-		auth:         authSvc,
-		lib:          lib,
-		webFS:        webFS,
-		opts:         opts,
-		jobSem:       make(chan struct{}, opts.MaxConcurrentJobs),
-		jobQueueWait: 10 * time.Second,
+		auth:          authSvc,
+		lib:           lib,
+		providerStore: providerStore,
+		webFS:         webFS,
+		opts:          opts,
+		jobSem:        make(chan struct{}, opts.MaxConcurrentJobs),
+		jobQueueWait:  10 * time.Second,
+		oauthStates:   newOAuthStateStore(),
 	}
 }
 
@@ -102,6 +115,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/auth/guest", s.guest)
 	mux.HandleFunc("/auth/me", s.me)
 	mux.HandleFunc("/auth/config", s.authConfig)
+	mux.HandleFunc("/auth/install", s.install)
+	mux.HandleFunc("/auth/email/send-code", s.emailSendCode)
+	mux.HandleFunc("/auth/email/verify", s.emailVerify)
+	mux.HandleFunc("/auth/oauth/github", s.oauthStart)
+	mux.HandleFunc("/auth/oauth/github/callback", s.oauthCallback)
+	mux.HandleFunc("/auth/oauth/google", s.oauthStart)
+	mux.HandleFunc("/auth/oauth/google/callback", s.oauthCallback)
+	mux.HandleFunc("/auth/oauth/linuxdo", s.oauthStart)
+	mux.HandleFunc("/auth/oauth/linuxdo/callback", s.oauthCallback)
 
 	mux.Handle("/api/stamps", s.protected(s.stamps))
 	mux.Handle("/api/stamps/", s.protected(s.stampByID))
@@ -109,6 +131,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/admin/settings", s.adminOnly(s.adminSettings))
 	mux.Handle("/api/admin/invites", s.adminOnly(s.adminInvites))
 	mux.Handle("/api/admin/invites/", s.adminOnly(s.adminInviteByID))
+	mux.Handle("/api/admin/providers", s.adminOnly(s.adminProviders))
+	mux.Handle("/api/admin/providers/create", s.adminOnly(s.adminProviderCreate))
+	mux.Handle("/api/admin/providers/", s.adminOnly(s.adminProviderByID))
+	mux.Handle("/api/ai/matting", s.protected(s.aiMatting))
 	mux.Handle("/api/process", s.protected(s.limitJobs(s.process)))
 	mux.Handle("/api/compose", s.protected(s.limitJobs(s.compose)))
 	mux.Handle("/api/image-to-pdf", s.protected(s.limitJobs(s.imageToPDF)))

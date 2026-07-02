@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -20,9 +22,20 @@ import (
 	"hlool-pdf/internal/auth"
 	"hlool-pdf/internal/config"
 	"hlool-pdf/internal/library"
+	"hlool-pdf/internal/providers"
 	"hlool-pdf/internal/server"
 	"hlool-pdf/internal/webui"
 )
+
+// newSetupToken 生成 128 位随机初始化令牌,分组展示便于人工抄录。
+func newSetupToken() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	hexStr := strings.ToUpper(hex.EncodeToString(raw))
+	return hexStr[:8] + "-" + hexStr[8:16] + "-" + hexStr[16:24] + "-" + hexStr[24:], nil
+}
 
 func main() {
 	addrFlag := flag.String("addr", "", "override HTTP listen address")
@@ -79,9 +92,35 @@ func main() {
 		}
 	}
 
+	// 还没有管理员:进入首次安装引导。生成一次性令牌供「非本机」完成初始化
+	// (本机访问免令牌);管理员创建后此令牌即失效。
+	setupToken := ""
+	if hasAdmin, err := authSvc.HasAdmin(context.Background()); err != nil {
+		log.Fatalf("check admin account: %v", err)
+	} else if !hasAdmin {
+		setupToken, err = newSetupToken()
+		if err != nil {
+			log.Fatalf("generate setup token: %v", err)
+		}
+		log.Printf("首次运行:浏览器打开后按向导创建管理员;远程访问初始化需输入令牌 %s", setupToken)
+	}
+
 	lib, backend, err := buildLibrary(cfg)
 	if err != nil {
 		log.Fatalf("init storage backend: %v", err)
+	}
+
+	// Initialize provider store. Use a stable encryption secret from environment.
+	encryptSecret := os.Getenv("HLOOL_PROVIDER_ENCRYPTION_SECRET")
+	if encryptSecret == "" {
+		// Generate a default secret from data directory path for single-user setups.
+		// Production deployments should set HLOOL_PROVIDER_ENCRYPTION_SECRET explicitly.
+		encryptSecret = cfg.DataDir + "-hlool-providers-v1"
+		log.Printf("warning: HLOOL_PROVIDER_ENCRYPTION_SECRET not set; using derived key (set it explicitly for production)")
+	}
+	providerStore, err := providers.NewStore(db.DB(), encryptSecret)
+	if err != nil {
+		log.Fatalf("init provider store: %v", err)
 	}
 
 	webFS := resolveWebFS(*webDirFlag)
@@ -117,7 +156,7 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Handler: server.New(authSvc, lib, webFS, server.Options{
+		Handler: server.New(authSvc, lib, providerStore, webFS, server.Options{
 			CORSOrigins:  cfg.CORSOrigins,
 			AllowedHosts: cfg.AllowedHosts,
 			BehindProxy:  cfg.BehindProxy,
@@ -132,6 +171,7 @@ func main() {
 			MaxProcessBodyBytes: cfg.MaxProcessBodyBytes,
 			MaxStampBytes:       cfg.MaxStampBytes,
 			MaxConcurrentJobs:   cfg.MaxConcurrentJobs,
+			SetupToken:          setupToken,
 		}).Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
 		ReadTimeout:       10 * time.Minute,

@@ -7,6 +7,7 @@ import {
   Layers,
   Loader2,
   LogOut,
+  MoreHorizontal,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -18,7 +19,8 @@ import {
   Trash2,
   Undo2,
   UserPlus,
-  UserRound
+  UserRound,
+  ZoomIn
 } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { cx } from '../lib/cx'
@@ -57,15 +59,21 @@ export function TopBar() {
       <FileMenu />
       <BusyChip />
       <div className="flex-1" />
-      <UndoRedo />
-      <TopBarDivider />
-      <ZoomMenu />
-      <TopBarDivider />
-      <HelpButton />
-      <ThemeToggle />
-      <UserMenu />
-      <RightPanelToggle />
-      <TopBarDivider />
+      <div className="hidden items-center gap-1.5 md:flex">
+        <UndoRedo />
+        <TopBarDivider />
+        <ZoomMenu />
+        <TopBarDivider />
+        <HelpButton />
+        <ThemeToggle />
+        <UserMenu />
+        <RightPanelToggle />
+        <TopBarDivider />
+      </div>
+      <div className="flex items-center gap-1.5 md:hidden">
+        <UserMenu />
+        <MobileMoreMenu />
+      </div>
       <GenerateSplitButton />
     </header>
   )
@@ -319,6 +327,55 @@ function UserMenu() {
             </MenuItem>
           </>
         )}
+      </MenuContent>
+    </Menu>
+  )
+}
+
+function MobileMoreMenu() {
+  const { pastStates, futureStates } = useTemporal()
+  const theme = useEditorStore((state) => state.theme)
+  const open = useEditorStore(rightPanelOpen)
+  const toggle = useEditorStore((state) => state.toggleRightPanel)
+  const toggleHelp = useShortcutHelp((state) => state.toggle)
+  const zoom = useEditorStore((state) => state.zoom)
+  const setZoom = useEditorStore((state) => state.setZoom)
+
+  return (
+    <Menu>
+      <MenuTrigger asChild>
+        <IconButton aria-label="更多">
+          <MoreHorizontal size={20} />
+        </IconButton>
+      </MenuTrigger>
+      <MenuContent align="end" className="w-52">
+        <MenuItem disabled={pastStates.length === 0} onSelect={() => undo()}>
+          <Undo2 size={16} />
+          撤销
+        </MenuItem>
+        <MenuItem disabled={futureStates.length === 0} onSelect={() => redo()}>
+          <Redo2 size={16} />
+          重做
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem onSelect={() => toggle()}>
+          <PanelRight size={16} />
+          {open ? '隐藏' : '显示'}属性面板
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem onSelect={() => setZoom(zoom, 'fit')}>
+          <ZoomIn size={16} />
+          缩放：{Math.round(zoom * 100)}%
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem onSelect={toggleHelp}>
+          <Keyboard size={16} />
+          快捷键
+        </MenuItem>
+        <MenuItem onSelect={toggleTheme}>
+          {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+          {theme === 'light' ? '暗色' : '亮色'}主题
+        </MenuItem>
       </MenuContent>
     </Menu>
   )

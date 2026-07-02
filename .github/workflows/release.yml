@@ -8,10 +8,11 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
-    name: Build and publish release
+    name: Build packages and image
     runs-on: ubuntu-latest
 
     steps:
@@ -83,8 +84,80 @@ jobs:
               tar -C dist/package -czf "dist/release/${package}.tar.gz" "${package}"
             fi
           done
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: docker-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/hlool-pdf
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' || github.ref_name == github.event.repository.default_branch }}
+
+      - name: Build and push Docker image
+        shell: bash
+        env:
+          DOCKER_TAGS: ${{ steps.docker-meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+
+          VERSION="$(cat VERSION)"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+
+          mapfile -t tags <<< "${DOCKER_TAGS}"
+          docker_build_tags=()
+          primary_tag=""
+          for tag in "${tags[@]}"; do
+            if [[ -z "${tag}" ]]; then
+              continue
+            fi
+            docker_build_tags+=("-t" "${tag}")
+            if [[ -z "${primary_tag}" ]]; then
+              primary_tag="${tag}"
+            fi
+          done
+          if [[ -z "${primary_tag}" ]]; then
+            echo "No Docker tags were generated"
+            exit 1
+          fi
+
+          docker build --platform linux/amd64 "${docker_build_tags[@]}" .
+          docker save "${primary_tag}" | gzip -9 > "dist/release/hlool-pdf_${VERSION}_linux_amd64_docker-image.tar.gz"
+
+          for tag in "${tags[@]}"; do
+            if [[ -n "${tag}" ]]; then
+              docker push "${tag}"
+            fi
+          done
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f dist/release/checksums.txt
           (cd dist/release && sha256sum * > checksums.txt)
+
+      - name: Upload packaged binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: hlool-pdf-packages
+          path: dist/release/*
+          if-no-files-found: error
 
       - name: Publish GitHub release
         if: github.ref_type == 'tag'
@@ -94,7 +167,14 @@ jobs:
           set -euo pipefail
 
           VERSION="${GITHUB_REF_NAME#v}"
-          NOTES="Hlool PDF ${VERSION} multi-platform release with Windows, Linux, and macOS packages for amd64 and arm64."
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER}/hlool-pdf:${GITHUB_REF_NAME}"
+          NOTES="Hlool PDF ${VERSION} multi-platform release with Windows, Linux, and macOS packages for amd64 and arm64.
+
+Docker image:
+
+\`\`\`bash
+docker pull ${IMAGE}
+\`\`\`"
 
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" dist/release/* --clobber

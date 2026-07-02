@@ -3,12 +3,13 @@ import { cx } from '../../lib/cx'
 import { DocumentPanel } from './DocumentPanel'
 import { PlacementInspector } from './PlacementInspector'
 import { SeamInspector } from './SeamInspector'
+import { ScanInspector } from './ScanInspector'
 
 /** 右侧上下文检查器：内容由当前选中对象决定。 */
 export function Inspector({ className }: { className?: string } = {}) {
   const file = useEditorStore(activeFile)
   const placement = useEditorStore(selectedPlacement)
-  const seamSelected = useEditorStore((state) => state.selection?.kind === 'seam')
+  const selectionKind = useEditorStore((state) => state.selection?.kind)
 
   return (
     <aside className={cx('flex w-[286px] shrink-0 flex-col border-l border-line bg-panel', className)}>
@@ -21,8 +22,10 @@ export function Inspector({ className }: { className?: string } = {}) {
           </p>
         ) : placement ? (
           <PlacementInspector placement={placement} file={file} />
-        ) : seamSelected ? (
+        ) : selectionKind === 'seam' ? (
           <SeamInspector file={file} />
+        ) : selectionKind === 'scan' ? (
+          <ScanInspector />
         ) : (
           <DocumentPanel file={file} />
         )}

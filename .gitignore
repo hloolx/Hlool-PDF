@@ -7,3 +7,7 @@ internal/webui/dist/
 web/node_modules/
 *.log
 *.exe~
+hlool-pdf*.exe
+.gotmp/
+.run-logs/
+CODEX_CC_ORCHESTRATOR_PROMPT.md

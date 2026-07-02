@@ -177,7 +177,23 @@ func (s *Server) authConfig(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, "auth config", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, settings)
+	// 邮箱/OAuth 登录入口按「是否已配置」显隐,前端据此渲染登录页。
+	_, mailOK := s.enabledMailProvider(r.Context())
+	needsInstall := s.needsInstall(r)
+	writeJSON(w, http.StatusOK, struct {
+		auth.AuthSettings
+		EmailLoginEnabled bool     `json:"emailLoginEnabled"`
+		OAuthProviders    []string `json:"oauthProviders"`
+		NeedsInstall      bool     `json:"needsInstall"`
+		// 远程访问初始化时需要输入启动日志里的令牌;本机访问免输。
+		InstallTokenRequired bool `json:"installTokenRequired"`
+	}{
+		AuthSettings:         settings,
+		EmailLoginEnabled:    mailOK,
+		OAuthProviders:       s.enabledOAuthKinds(r.Context()),
+		NeedsInstall:         needsInstall,
+		InstallTokenRequired: needsInstall && !s.requestFromLoopback(r),
+	})
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) error {

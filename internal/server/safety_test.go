@@ -12,7 +12,7 @@ import (
 // a single slot held, the next request is turned away with 503 + Retry-After +
 // the machine-readable server_busy code (so the frontend can back off).
 func TestLimitJobsRejectsWhenSaturated(t *testing.T) {
-	srv := New(nil, nil, nil, Options{MaxConcurrentJobs: 1})
+	srv := New(nil, nil, nil, nil, Options{MaxConcurrentJobs: 1})
 	srv.jobQueueWait = 50 * time.Millisecond
 
 	started := make(chan struct{})
@@ -49,7 +49,7 @@ func TestLimitJobsRejectsWhenSaturated(t *testing.T) {
 
 // TestLimitJobsReleasesSlot confirms a finished job frees its slot for the next.
 func TestLimitJobsReleasesSlot(t *testing.T) {
-	srv := New(nil, nil, nil, Options{MaxConcurrentJobs: 1})
+	srv := New(nil, nil, nil, nil, Options{MaxConcurrentJobs: 1})
 	srv.jobQueueWait = time.Second
 	handler := srv.limitJobs(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

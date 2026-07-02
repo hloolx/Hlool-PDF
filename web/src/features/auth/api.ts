@@ -28,6 +28,17 @@ export function createGuest() {
   return postJSON<AuthUser>('/auth/guest', {})
 }
 
+/** 首次安装:创建管理员并写入访问开关,成功即持有会话。 */
+export function installInstance(payload: {
+  token?: string
+  username: string
+  password: string
+  guestEnabled: boolean
+  registerEnabled: boolean
+}) {
+  return postJSON<AuthUser>('/auth/install', payload)
+}
+
 export async function logout(): Promise<void> {
   await postJSON('/auth/logout', {})
 }

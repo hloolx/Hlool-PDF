@@ -42,7 +42,8 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	authSvc := auth.NewService(db, auth.Options{})
-	srv := New(authSvc, lib, nil, Options{})
+	// Provider store is optional for tests; pass nil.
+	srv := New(authSvc, lib, nil, nil, Options{})
 
 	user, err := authSvc.Register(context.Background(), "test", "alice", "supersecret123")
 	if err != nil {
@@ -166,7 +167,7 @@ func TestGuestEndpoint(t *testing.T) {
 	}
 
 	// With guest mode enabled, an anonymous POST mints a guest session.
-	guestHandler := New(h.auth, h.lib, nil, Options{AllowGuest: true}).Handler()
+	guestHandler := New(h.auth, h.lib, nil, nil, Options{AllowGuest: true}).Handler()
 	rec := httptest.NewRecorder()
 	guestHandler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/guest", nil))
 	if rec.Code != http.StatusOK {
@@ -202,7 +203,7 @@ func TestGuestEndpoint(t *testing.T) {
 // registering, because the account is upgraded in place (same uid).
 func TestGuestClaimCarriesLibrary(t *testing.T) {
 	h := newHarness(t)
-	guestHandler := New(h.auth, h.lib, nil, Options{AllowGuest: true}).Handler()
+	guestHandler := New(h.auth, h.lib, nil, nil, Options{AllowGuest: true}).Handler()
 
 	// Become a guest.
 	rec := httptest.NewRecorder()

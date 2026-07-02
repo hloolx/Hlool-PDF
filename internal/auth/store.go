@@ -69,6 +69,10 @@ func OpenDB(path string) (*DB, error) {
 		_ = sqldb.Close()
 		return nil, err
 	}
+	if err := db.runMigrations(context.Background()); err != nil {
+		_ = sqldb.Close()
+		return nil, err
+	}
 	return db, nil
 }
 
