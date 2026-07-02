@@ -168,13 +168,14 @@ jobs:
 
           VERSION="${GITHUB_REF_NAME#v}"
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER}/hlool-pdf:${GITHUB_REF_NAME}"
-          NOTES="Hlool PDF ${VERSION} multi-platform release with Windows, Linux, and macOS packages for amd64 and arm64.
+          NOTES="$(cat <<EOF
+          Hlool PDF ${VERSION} multi-platform release with Windows, Linux, and macOS packages for amd64 and arm64.
 
-Docker image:
+          Docker image:
 
-\`\`\`bash
-docker pull ${IMAGE}
-\`\`\`"
+          docker pull ${IMAGE}
+          EOF
+          )"
 
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" dist/release/* --clobber
