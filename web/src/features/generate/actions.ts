@@ -62,8 +62,8 @@ function buildParams(state: EditorState, file: PDFFile, options?: { omitOutputPa
   }
 }
 
-/** 同步加工：源 PDF + 参数 → /api/process 盖章；开了扫描效果则继续在本地逐页重扫。 */
-export async function processFile(file: PDFFile, busyPrefix = ''): Promise<void> {
+/** 同步加工：源 PDF + 参数 → /api/process 盖章；开了扫描效果则继续在本地逐页重扫。返回成品字节与文件名。 */
+export async function processFile(file: PDFFile, busyPrefix = ''): Promise<{ blob: Blob; name: string }> {
   const state = useEditorStore.getState()
   const config = state.configs[file.fileId]
   const scanConfig = config?.scanEnabled ? (config.scanConfig ?? DEFAULT_SCAN) : null
@@ -91,7 +91,7 @@ export async function processFile(file: PDFFile, busyPrefix = ''): Promise<void>
       blob = await postFormBlob('/api/process', encryptForm)
     }
   }
-  downloadBlob(blob, params.outputName)
+  return { blob, name: params.outputName }
 }
 
 export async function generateCurrent() {
@@ -104,7 +104,8 @@ export async function generateCurrent() {
   }
   useEditorStore.getState().setBusy('正在生成…')
   try {
-    await processFile(file)
+    const output = await processFile(file)
+    downloadBlob(output.blob, output.name)
     toast('已生成，开始下载', { kind: 'success' })
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) requireReauth()
@@ -114,30 +115,68 @@ export async function generateCurrent() {
   }
 }
 
-/** 批量：逐个文件调用 /api/process 并下载。 */
+/** ZIP 内文件名去重：重名追加 -2 / -3 …（浏览器多文件下载会被拦，ZIP 里重名会互相覆盖）。 */
+function uniqueZipName(name: string, used: Set<string>): string {
+  let candidate = name
+  for (let i = 2; used.has(candidate.toLowerCase()); i++) {
+    candidate = name.replace(/\.pdf$/i, '') + `-${i}.pdf`
+  }
+  used.add(candidate.toLowerCase())
+  return candidate
+}
+
+function zipFileName(): string {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `盖章文件-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.zip`
+}
+
+/** 批量：逐个文件调用 /api/process；多个成品打包成一个 ZIP 单次下载（单文件保持直下）。 */
 export async function generateAll() {
   const files = configuredFiles(useEditorStore.getState())
   if (files.length === 0) {
     toast('还没有任何文件配置了印章。', { kind: 'error' })
     return
   }
-  let done = 0
+  const outputs: Array<{ blob: Blob; name: string }> = []
   let failed = 0
-  for (const file of files) {
-    const prefix = `正在生成 ${done + failed + 1}/${files.length}：`
-    useEditorStore.getState().setBusy(`${prefix}处理中…`)
-    try {
-      await processFile(file, prefix)
-      done++
-    } catch (err) {
-      failed++
-      if (err instanceof ApiError && err.status === 401) {
-        requireReauth()
-        break
+  try {
+    for (const file of files) {
+      const prefix = `正在生成 ${outputs.length + failed + 1}/${files.length}：`
+      useEditorStore.getState().setBusy(`${prefix}处理中…`)
+      try {
+        outputs.push(await processFile(file, prefix))
+      } catch (err) {
+        failed++
+        if (err instanceof ApiError && err.status === 401) {
+          requireReauth()
+          return
+        }
+        toast(`${file.name}：${errorText(err)}`, { kind: 'error' })
       }
-      toast(`${file.name}：${errorText(err)}`, { kind: 'error' })
     }
+    if (outputs.length === 0) return
+    if (outputs.length === 1) {
+      downloadBlob(outputs[0].blob, outputs[0].name)
+    } else {
+      useEditorStore.getState().setBusy('正在打包 ZIP…')
+      // 动态加载：jszip 只在批量出件时用到，不进入口包。
+      const { default: JSZip } = await import('jszip')
+      const zip = new JSZip()
+      const used = new Set<string>()
+      for (const output of outputs) {
+        zip.file(uniqueZipName(output.name, used), output.blob)
+      }
+      // PDF 本身已压缩，STORE 打包速度快且体积几乎不变。
+      const bundle = await zip.generateAsync({ type: 'blob', compression: 'STORE' })
+      downloadBlob(bundle, zipFileName())
+    }
+  } finally {
+    useEditorStore.getState().setBusy('')
   }
-  useEditorStore.getState().setBusy('')
-  if (failed === 0) toast(`已生成 ${done} 个文件`, { kind: 'success' })
+  if (failed === 0) {
+    toast(outputs.length > 1 ? `已生成 ${outputs.length} 个文件，打包为 ZIP 下载` : '已生成，开始下载', { kind: 'success' })
+  } else if (outputs.length > 0) {
+    toast(`已生成 ${outputs.length} 个，失败 ${failed} 个`, { kind: 'error' })
+  }
 }

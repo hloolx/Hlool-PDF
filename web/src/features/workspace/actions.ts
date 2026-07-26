@@ -1,4 +1,5 @@
 import { ApiError, deleteJSON, errorText, postFormBlob, upload } from '../../lib/api'
+import { fileFingerprint } from '../../lib/fingerprint'
 import { ensurePdfName, isPasswordException, makePdfFile, readPdfPages } from '../../lib/pdfDoc'
 import { clamp, type PDFFile, type StampAsset } from '../../lib/types'
 import { activeFile, hasConfig, switchFile, useEditorStore } from '../../state/store'
@@ -6,6 +7,7 @@ import { toast } from '../../state/toasts'
 import { prepareStamp } from '../stamps/importPipeline'
 import { generateStampId } from '../stamps/persistence'
 import { requireReauth } from '../auth/useAuth'
+import { restoreConfigs } from './configVault'
 import { askImportTarget } from './importPrompt'
 import { askPassword } from './passwordPrompt'
 
@@ -64,15 +66,18 @@ async function imageToPdf(blob: Blob, name: string): Promise<Blob> {
 /** 用新字节重建文件但保留 fileId（合并/重排后配置得以延续）。 */
 export async function rebuildFile(fileId: string, name: string, blob: Blob, password?: string): Promise<PDFFile> {
   const pages = await readPdfPages(blob, password)
+  const normalizedName = ensurePdfName(name)
+  const fingerprint = await fileFingerprint(normalizedName, blob).catch(() => undefined)
   return {
     fileId,
-    name: ensurePdfName(name),
+    name: normalizedName,
     size: blob.size,
     pageCount: pages.length,
     pages,
     createdAt: new Date().toISOString(),
     blob,
-    password
+    password,
+    fingerprint
   }
 }
 
@@ -184,6 +189,8 @@ export async function importAsNewProject(all: File[]) {
     projects.length > 1 ? `已导入 ${projects.length} 个项目，可在顶栏切换` : `已打开新项目 ${projects[0].name}`,
     { kind: 'success' }
   )
+  // 同一文件重新导入时找回上次的盖章配置（配置防丢，切完文件再恢复以便可撤销）。
+  restoreConfigs(projects)
 }
 
 /** 并入当前项目：新导入的页面追加到当前文件末尾，fileId 不变，配置保留。 */

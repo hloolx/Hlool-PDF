@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type stampView struct {
 	Name      string    `json:"name"`
 	URL       string    `json:"url"`
 	Mime      string    `json:"mime"`
+	Size      int64     `json:"size"`
 	WidthPx   int       `json:"widthPx"`
 	HeightPx  int       `json:"heightPx"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -38,10 +40,34 @@ func toStampView(m library.StampMeta) stampView {
 		Name:      m.Name,
 		URL:       "/api/stamps/" + m.ID + "/content",
 		Mime:      m.Mime,
+		Size:      m.Size,
 		WidthPx:   m.WidthPx,
 		HeightPx:  m.HeightPx,
 		CreatedAt: m.CreatedAt,
 	}
+}
+
+// stampQuota 返回实例配额与当前用量,印章架用它画容量条(预防而不是撞墙)。
+func (s *Server) stampQuota(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	metas, err := s.lib.ListStamps(r.Context(), uid(r))
+	if err != nil {
+		writeInternalError(w, "stamp quota", err)
+		return
+	}
+	var total int64
+	for _, m := range metas {
+		total += m.Size
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"stampCount":      len(metas),
+		"libraryBytes":    total,
+		"maxStamps":       s.opts.MaxStampsPerUser,
+		"maxLibraryBytes": s.opts.MaxLibraryBytes,
+	})
 }
 
 func (s *Server) stamps(w http.ResponseWriter, r *http.Request) {
@@ -185,8 +211,20 @@ func (s *Server) streamStamp(w http.ResponseWriter, r *http.Request, id string) 
 		return
 	}
 	defer rc.Close()
+	// 印章内容归属账号,只允许私有缓存;ETag 协商让重复访问走 304(印章架和
+	// 画布每次渲染都会拉图)。同 id 覆盖上传会更新 CreatedAt,ETag 随之失效。
+	etag := fmt.Sprintf(`"%s-%d-%d"`, meta.ID, meta.Size, meta.CreatedAt.Unix())
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("ETag", etag)
+	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	if meta.Mime != "" {
 		w.Header().Set("Content-Type", meta.Mime)
+	}
+	if meta.Size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	}
 	_, _ = io.Copy(w, rc)
 }

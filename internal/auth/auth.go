@@ -364,6 +364,41 @@ func (s *Service) claimGuestExternal(ctx context.Context, uid, provider, subject
 	return User{}, ErrUsernameTaken
 }
 
+// ListUsers 给管理台用：全部账号（含游客），新的在前。
+func (s *Service) ListUsers(ctx context.Context, limit int) ([]User, error) {
+	return s.db.ListUsers(ctx, limit)
+}
+
+// UserByID resolves an account by id (admin user management inspects targets).
+func (s *Service) UserByID(ctx context.Context, id string) (User, error) {
+	return s.db.UserByID(ctx, id)
+}
+
+// AdminResetPassword 管理员重置某用户密码，并在同一事务里吊销其全部会话。
+func (s *Service) AdminResetPassword(ctx context.Context, userID, password string) error {
+	if len(password) < 8 || len(password) > 1024 {
+		return ErrWeakPassword
+	}
+	hash, err := hashPassword(password)
+	if err != nil {
+		return err
+	}
+	return s.db.ResetPassword(ctx, userID, hash)
+}
+
+// DeleteUserAccount removes the account row; sessions and identities cascade
+// away. The caller must purge the user's library first (mirrors the guest
+// sweep's order, so a failed purge never orphans stored data).
+func (s *Service) DeleteUserAccount(ctx context.Context, userID string) error {
+	return s.db.DeleteUser(ctx, userID)
+}
+
+// GuestIDs returns ids of guest accounts created at or before cutoff. Pass
+// time.Now() to target every guest (manual "clear all guests").
+func (s *Service) GuestIDs(ctx context.Context, cutoff time.Time) ([]string, error) {
+	return s.db.ExpiredGuestIDs(ctx, cutoff)
+}
+
 func (s *Service) EnsureAdmin(ctx context.Context, username, password string) (User, bool, error) {
 	username, err := validateCredentials(username, password)
 	if err != nil {

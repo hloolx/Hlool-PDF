@@ -15,8 +15,10 @@ import (
 // for PDF.js (worker + rendered images) and stamp/image previews; style
 // 'unsafe-inline' is required by the component styling. The task's mandated
 // directives (default-src/connect-src 'self', frame-ancestors 'none') are kept.
+// The script-src hash admits the inline theme-restore script in web/index.html
+// (dark-mode FOUC guard); recompute and update it whenever that script changes.
 const contentSecurityPolicy = "default-src 'self'; " +
-	"script-src 'self'; " +
+	"script-src 'self' 'sha256-k49LJ3d8RR5aYeusxZ81DjpYrYD2SrMMqLzPxmsCUj4='; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' blob: data:; " +
 	"font-src 'self' data:; " +

@@ -157,6 +157,11 @@ export function localizeError(value: string) {
     'invalid parameters': '请求参数无效。',
     'image dimensions are out of range': '图片尺寸超出允许范围。',
     'guest access is disabled': '当前实例未开放游客使用。',
+    'user not found': '用户不存在。',
+    'cannot delete your own account': '不能删除自己当前登录的账号。',
+    'cannot reset your own password here': '不能在这里重置自己的密码。',
+    'guest accounts have no password': '游客身份没有密码可重置。',
+    'password must be at least 8 characters': '密码至少需要 8 个字符。',
     'the PDF could not be opened': '该 PDF 无法打开。',
     'the PDF could not be read': '该 PDF 无法读取。'
   }

@@ -20,6 +20,8 @@ export type PDFFile = {
   blob: Blob
   /** 加密 PDF 的打开密码（渲染与加工都要用）。 */
   password?: string
+  /** 文件指纹（size+名字+首尾字节哈希），用于配置防丢的本地匹配。 */
+  fingerprint?: string
 }
 
 export type StampAsset = {
@@ -28,6 +30,8 @@ export type StampAsset = {
   /** 后端代理内容地址 /api/stamps/{id}/content（同源带 cookie）。 */
   url: string
   mime?: string
+  /** 图片字节数（印章架容量条用；旧会话数据可能缺省）。 */
+  size?: number
   widthPx: number
   heightPx: number
   createdAt: string

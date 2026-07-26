@@ -4,6 +4,7 @@ import { useEditorStore } from '../../state/store'
 import { toast } from '../../state/toasts'
 import { requireReauth } from '../auth/useAuth'
 import { loadSettings, startSettingsSync } from '../library/settings'
+import { startConfigVault } from './configVault'
 
 /**
  * 启动引导（登录后）：拉取印章库与设置，开启设置同步。文件为内存态，初始为空。
@@ -12,6 +13,7 @@ import { loadSettings, startSettingsSync } from '../library/settings'
  * 因此重达 ~120kB(gz) 的 pdfjs 不会被拉入认证前的入口包，只随工作区分包按需加载。
  */
 export async function bootWorkspace(): Promise<void> {
+  startConfigVault()
   try {
     const [stamps] = await Promise.all([getJSON<StampAsset[]>('/api/stamps'), loadSettings()])
     const list = stamps ?? []

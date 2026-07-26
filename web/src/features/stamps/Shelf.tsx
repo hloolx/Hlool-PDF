@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Check, ImagePlus, Pencil, Sparkles, Trash2, X } from 'lucide-react'
+import { getJSON } from '../../lib/api'
 import { cx } from '../../lib/cx'
 import type { StampAsset } from '../../lib/types'
 import { stampLabel, useEditorStore } from '../../state/store'
@@ -17,6 +18,63 @@ const SELECT_THRESHOLD = 5
 
 type SelectBox = { left: number; top: number; width: number; height: number }
 type SelectPress = { startX: number; startY: number; active: boolean }
+
+/* ---- 库配额（实例级常量，取一次缓存整个会话） ---- */
+
+type QuotaLimits = { maxStamps: number; maxLibraryBytes: number }
+
+let quotaLimitsCache: QuotaLimits | null = null
+
+function useQuotaLimits(): QuotaLimits | null {
+  const [limits, setLimits] = useState<QuotaLimits | null>(quotaLimitsCache)
+  useEffect(() => {
+    if (quotaLimitsCache) return
+    let cancelled = false
+    getJSON<QuotaLimits>('/api/stamps/quota')
+      .then((quota) => {
+        quotaLimitsCache = { maxStamps: quota.maxStamps, maxLibraryBytes: quota.maxLibraryBytes }
+        if (!cancelled) setLimits(quotaLimitsCache)
+      })
+      .catch(() => {
+        /* 取不到配额只是不显示容量条，不打扰使用 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return limits
+}
+
+function formatMB(bytes: number): string {
+  const mb = bytes / (1024 * 1024)
+  if (mb >= 10) return String(Math.round(mb))
+  return (Math.round(mb * 10) / 10).toString()
+}
+
+/** 印章架顶部的用量行：N/上限 + 容量条（后端有硬配额，这里让人提前看到而不是撞墙）。 */
+function QuotaBar({ stamps }: { stamps: StampAsset[] }) {
+  const limits = useQuotaLimits()
+  if (!limits || stamps.length === 0) return null
+  const usedBytes = stamps.reduce((sum, stamp) => sum + (stamp.size ?? 0), 0)
+  const ratio = Math.max(stamps.length / limits.maxStamps, usedBytes / limits.maxLibraryBytes)
+  const nearFull = ratio >= 0.9
+  return (
+    <div className="px-3 pt-1.5">
+      <div className="flex items-center justify-between text-[11px] text-ink-muted">
+        <span>库用量</span>
+        <span className={cx('tnum', nearFull && 'font-medium text-accent')}>
+          {stamps.length}/{limits.maxStamps} 个 · {formatMB(usedBytes)}/{formatMB(limits.maxLibraryBytes)} MB
+        </span>
+      </div>
+      <div className="mt-1 h-1 overflow-hidden rounded-full bg-sunken">
+        <div
+          className={cx('h-full rounded-full transition-[width] duration-300', nearFull ? 'bg-accent' : 'bg-ink-muted/40')}
+          style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }}
+        />
+      </div>
+    </div>
+  )
+}
 
 function boxFromPoints(startX: number, startY: number, x: number, y: number): SelectBox {
   const left = Math.min(startX, x)
@@ -81,6 +139,7 @@ export function StampShelf() {
         <SectionTitle>印章架</SectionTitle>
         {stamps.length > 0 && <span className="text-[11px] text-ink-muted">拖到页面盖章</span>}
       </div>
+      <QuotaBar stamps={stamps} />
       <div
         className={cx('scroll-slim grid max-h-[280px] grid-cols-2 gap-2 overflow-y-auto p-3', selectedIds.length > 0 && 'pb-14')}
         onPointerDown={onPointerDown}

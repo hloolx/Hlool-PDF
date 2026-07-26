@@ -1,3 +1,4 @@
+import { fileFingerprint } from './fingerprint'
 import { pdfjsLib } from './pdfjs'
 import type { PageInfo, PDFFile } from './types'
 
@@ -39,14 +40,18 @@ export function ensurePdfName(name: string): string {
 /** 把一段 PDF 字节封装成工作区文件（读取页面几何，分配 client fileId）。 */
 export async function makePdfFile(blob: Blob, name: string, password?: string): Promise<PDFFile> {
   const pages = await readPdfPages(blob, password)
+  const normalizedName = ensurePdfName(name)
+  // 指纹失败（极老浏览器等）不阻断导入，只是失去配置防丢。
+  const fingerprint = await fileFingerprint(normalizedName, blob).catch(() => undefined)
   return {
     fileId: genFileId(),
-    name: ensurePdfName(name),
+    name: normalizedName,
     size: blob.size,
     pageCount: pages.length,
     pages,
     createdAt: new Date().toISOString(),
     blob,
-    password
+    password,
+    fingerprint
   }
 }

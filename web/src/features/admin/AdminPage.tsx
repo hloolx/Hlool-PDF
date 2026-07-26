@@ -18,6 +18,7 @@ import {
   type RegistrationInvite
 } from './api'
 import { ProvidersPanel } from './ProvidersPanel'
+import { UsersPanel } from './UsersPanel'
 
 const fallbackSettings: AdminSettings = {
   registerEnabled: true,
@@ -115,7 +116,7 @@ export function AdminPage() {
           </span>
           <div className="min-w-0">
             <h1 className="truncate text-[15px] font-semibold">管理员后台</h1>
-            <p className="truncate text-xs text-ink-muted">注册策略与邀请码</p>
+            <p className="truncate text-xs text-ink-muted">用户、注册策略与邀请码</p>
           </div>
         </div>
         <div className="flex-1" />
@@ -127,6 +128,8 @@ export function AdminPage() {
 
       <main className="min-h-0 flex-1 overflow-auto px-4 py-4">
         <div className="mx-auto grid max-w-6xl gap-4">
+          <UsersPanel />
+
           <ProvidersPanel />
 
           <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">

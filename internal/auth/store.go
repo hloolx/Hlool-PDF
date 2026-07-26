@@ -388,6 +388,60 @@ func (d *DB) DeleteExpiredSessions(ctx context.Context, now time.Time) error {
 	return err
 }
 
+// ListUsers returns up to limit accounts (guests included), newest first.
+func (d *DB) ListUsers(ctx context.Context, limit int) ([]User, error) {
+	if limit <= 0 || limit > 2000 {
+		limit = 1000
+	}
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, username, password_hash, created_at, is_guest, is_admin
+		   FROM users ORDER BY created_at DESC, id LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := []User{}
+	for rows.Next() {
+		var u User
+		var createdAt int64
+		var isGuest, isAdmin int
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &createdAt, &isGuest, &isAdmin); err != nil {
+			return nil, err
+		}
+		u.CreatedAt = time.Unix(createdAt, 0).UTC()
+		u.IsGuest = isGuest != 0
+		u.IsAdmin = isAdmin != 0
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// ResetPassword sets a new password hash and revokes every session of the user
+// in one transaction, so a stolen or forgotten session cannot outlive the
+// reset. Returns ErrUserNotFound when id does not exist.
+func (d *DB) ResetPassword(ctx context.Context, id, passwordHash string) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // ExpiredGuestIDs returns the ids of guest accounts created at or before cutoff.
 // The caller purges each guest's library and then DeleteUser's the row.
 func (d *DB) ExpiredGuestIDs(ctx context.Context, cutoff time.Time) ([]string, error) {

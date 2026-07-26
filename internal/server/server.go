@@ -7,6 +7,8 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -79,6 +82,9 @@ type Server struct {
 	installedFlag atomic.Bool
 	// mattingLimiter 按 uid 限制 AI 抠图调用次数(外部付费 API,防刷)。
 	mattingLimiter *rateCounter
+	// assetETags caches per-path ETags of the embedded static files. The web FS
+	// is immutable for the process lifetime, so each hash is computed once.
+	assetETags sync.Map
 }
 
 // New builds a Server.
@@ -141,9 +147,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/auth/oauth/linuxdo/callback", s.oauthCallback)
 
 	mux.Handle("/api/stamps", s.protected(s.stamps))
+	mux.Handle("/api/stamps/quota", s.protected(s.stampQuota))
 	mux.Handle("/api/stamps/", s.protected(s.stampByID))
 	mux.Handle("/api/settings", s.protected(s.settings))
 	mux.Handle("/api/admin/settings", s.adminOnly(s.adminSettings))
+	mux.Handle("/api/admin/users", s.adminOnly(s.adminUsers))
+	mux.Handle("/api/admin/users/cleanup-guests", s.adminOnly(s.adminGuestCleanup))
+	mux.Handle("/api/admin/users/", s.adminOnly(s.adminUserByID))
 	mux.Handle("/api/admin/invites", s.adminOnly(s.adminInvites))
 	mux.Handle("/api/admin/invites/", s.adminOnly(s.adminInviteByID))
 	mux.Handle("/api/admin/providers", s.adminOnly(s.adminProviders))
@@ -237,7 +247,7 @@ func (s *Server) web(w http.ResponseWriter, r *http.Request) {
 	}
 	if fs.ValidPath(cleanPath) {
 		if info, err := fs.Stat(s.webFS, cleanPath); err == nil && !info.IsDir() {
-			serveFSFile(w, r, s.webFS, cleanPath)
+			s.serveFSFile(w, r, cleanPath)
 			return
 		}
 	}
@@ -249,7 +259,7 @@ func (s *Server) web(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("web route not found"))
 		return
 	}
-	serveFSFile(w, r, s.webFS, "index.html")
+	s.serveFSFile(w, r, "index.html")
 }
 
 func acceptsHTML(r *http.Request) bool {
@@ -257,8 +267,8 @@ func acceptsHTML(r *http.Request) bool {
 	return accept == "" || strings.Contains(accept, "text/html") || strings.Contains(accept, "*/*")
 }
 
-func serveFSFile(w http.ResponseWriter, r *http.Request, webFS fs.FS, name string) {
-	data, err := fs.ReadFile(webFS, name)
+func (s *Server) serveFSFile(w http.ResponseWriter, r *http.Request, name string) {
+	data, err := fs.ReadFile(s.webFS, name)
 	if err != nil {
 		writeError(w, http.StatusNotFound, errors.New("web asset not found"))
 		return
@@ -266,6 +276,20 @@ func serveFSFile(w http.ResponseWriter, r *http.Request, webFS fs.FS, name strin
 	if typ := mime.TypeByExtension(path.Ext(name)); typ != "" {
 		w.Header().Set("Content-Type", typ)
 	}
+	// Vite 产物在 assets/ 下且文件名带内容哈希,可以永久缓存;其余入口文件
+	// (index.html 等)每次协商,靠 ETag 命中 304,避免 pdfjs/worker 这类大块
+	// 资源每次访问都整包重拉。
+	if strings.HasPrefix(name, "assets/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	etag, ok := s.assetETags.Load(name)
+	if !ok {
+		sum := sha256.Sum256(data)
+		etag, _ = s.assetETags.LoadOrStore(name, `"`+hex.EncodeToString(sum[:16])+`"`)
+	}
+	w.Header().Set("ETag", etag.(string))
 	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(data))
 }
 
