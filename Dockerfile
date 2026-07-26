@@ -30,7 +30,6 @@ COPY --from=build /out/hlool-pdf /usr/local/bin/hlool-pdf
 USER 10001:10001
 EXPOSE 8080
 VOLUME ["/data"]
-ENV HLOOL_MODE=web
 ENV HLOOL_ADDR=0.0.0.0:8080
 ENV HLOOL_DATA_DIR=/data
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD ["curl", "-fsS", "http://127.0.0.1:8080/healthz"]

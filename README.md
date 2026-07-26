@@ -213,7 +213,23 @@ $env:HTTPS_PROXY="http://127.0.0.1:9000"
 
 ## Docker 部署
 
-构建镜像：
+最省事的方式是用仓库自带的 `docker-compose.yml`：它直接拉取 GitHub Actions
+随版本发布的现成镜像 `ghcr.io/hloolx/hlool-pdf`，服务器上无需构建，宝塔
+「Docker → 编排」里整段粘贴同样可用：
+
+```bash
+docker compose up -d
+```
+
+更新到新版本（数据在命名卷里，不会丢）：
+
+```bash
+docker pull ghcr.io/hloolx/hlool-pdf:latest
+docker rm -f hlool-pdf
+docker compose up -d
+```
+
+也可以本地手动构建镜像：
 
 ```powershell
 docker build -t hlool-pdf:local .
