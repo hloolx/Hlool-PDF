@@ -1,4 +1,4 @@
-import { errorText, postFormBlob } from '../../lib/api'
+import { ApiError, errorText, postFormBlob } from '../../lib/api'
 import { downloadBlob } from '../../lib/download'
 import type { PDFDocumentProxy } from '../../lib/pdfjs'
 import { parsePageExpression } from '../../lib/pages'
@@ -6,6 +6,7 @@ import type { FileConfig, PDFFile, PageInfo, Placement, StampAsset } from '../..
 import { activeConfig, useEditorStore, type EditorState } from '../../state/store'
 import { toast } from '../../state/toasts'
 import { composePdf } from '../workspace/actions'
+import { requireReauth } from '../auth/useAuth'
 import { seamCrop, seamRectPt } from '../seam/slices'
 import { loadImage } from './imageCache'
 
@@ -271,7 +272,8 @@ export async function exportPagePdf(doc: PDFDocumentProxy | null, file: PDFFile,
     downloadBlob(output, name)
     toast(`已导出第 ${pageInfo.pageNumber} 页 PDF`, { kind: 'success' })
   } catch (err) {
-    toast(errorText(err), { kind: 'error' })
+    if (err instanceof ApiError && err.status === 401) requireReauth()
+    else toast(errorText(err), { kind: 'error' })
   } finally {
     useEditorStore.getState().setBusy('')
   }

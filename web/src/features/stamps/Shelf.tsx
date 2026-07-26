@@ -10,7 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../../ui/Popover'
 import { SectionTitle } from '../../ui/Section'
 import { useGhost } from '../placements/ghost'
 import { placeAtClientPoint } from '../placements/actions'
-import { deleteStampAction, deleteStampsAction, uploadStamps } from '../workspace/actions'
+import { deleteStampAction, deleteStampsAction, replaceStampImage, uploadStamps } from '../workspace/actions'
 import { MattingDialog } from './MattingDialog'
 
 const SELECT_THRESHOLD = 5
@@ -325,9 +325,9 @@ function MattingButton({ stamp }: { stamp: StampAsset }) {
     if (saveAsNew) {
       await uploadStamps([file])
     } else {
-      // Replace existing stamp
-      await deleteStampAction(stamp)
-      await uploadStamps([file])
+      // 原位替换：新章顶替旧章的所有引用（已放置的章与骑缝配置保留）。
+      // 不能先删后传：removeStamp 会级联清掉页面上的 placements。
+      await replaceStampImage(stamp, file, file.name)
     }
   }
 

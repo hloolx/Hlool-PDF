@@ -24,9 +24,12 @@ type Config struct {
 	OpenBrowser bool
 
 	// AllowedHosts is the Host-header allowlist (DNS-rebinding guard). Empty
-	// means "derive a localhost default" (see Load).
+	// means any Host header is accepted (main logs a warning; set it in
+	// production).
 	AllowedHosts []string
-	// CORSOrigins lists cross-origin sites permitted to call the API.
+	// CORSOrigins lists cross-origin sites permitted to call the API. "*" is
+	// rejected at Load: the session rides a cookie, and browsers refuse
+	// credentialed requests against a wildcard origin, so it could never work.
 	CORSOrigins []string
 
 	// TLSCert / TLSKey enable the built-in HTTPS listener when both are set.
@@ -62,6 +65,10 @@ type Config struct {
 	// then get 503. Defaults to GOMAXPROCS. Lower it on small-RAM instances —
 	// each job can transiently use several times the source-PDF size.
 	MaxConcurrentJobs int
+	// MaxStampsPerUser / MaxLibraryBytes 是每用户印章库配额(数量 / 总字节)。
+	// 游客可匿名开号,没有配额等于放任填盘。
+	MaxStampsPerUser int
+	MaxLibraryBytes  int64
 
 	// S3 holds the object-storage backend settings. When S3.Bucket is empty
 	// the local filesystem backend is used instead.
@@ -135,6 +142,8 @@ func Load() (Config, error) {
 		MaxProcessBodyBytes: envInt64(envs, "HLOOL_MAX_PROCESS_BODY_MB", defaultMaxProcessBodyMB) << 20,
 		MaxStampBytes:       envInt64(envs, "HLOOL_MAX_STAMP_MB", defaultMaxStampMB) << 20,
 		MaxConcurrentJobs:   int(envInt64(envs, "HLOOL_MAX_CONCURRENT_JOBS", int64(runtime.GOMAXPROCS(0)))),
+		MaxStampsPerUser:    int(envInt64(envs, "HLOOL_MAX_STAMPS_PER_USER", 200)),
+		MaxLibraryBytes:     envInt64(envs, "HLOOL_MAX_LIBRARY_MB", 200) << 20,
 
 		S3: S3Config{
 			Bucket:         strings.TrimSpace(envValue(envs, "HLOOL_S3_BUCKET")),
@@ -148,6 +157,13 @@ func Load() (Config, error) {
 
 	if (cfg.TLSCert == "") != (cfg.TLSKey == "") {
 		return Config{}, fmt.Errorf("HLOOL_TLS_CERT and HLOOL_TLS_KEY must be set together")
+	}
+	for _, origin := range cfg.CORSOrigins {
+		if origin == "*" {
+			// 会话走 Cookie:浏览器拒绝「通配符 + 凭据」的组合,CSRF 守卫也按
+			// 字面比对来源。配 "*" 永远不可能生效,与其静默失灵不如启动即报错。
+			return Config{}, fmt.Errorf("HLOOL_CORS_ORIGINS does not support %q; list explicit origins (cookie-based auth cannot work with a wildcard)", "*")
+		}
 	}
 	if cfg.UseS3() {
 		if cfg.S3.Region == "" && cfg.S3.Endpoint == "" {

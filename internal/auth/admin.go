@@ -151,6 +151,11 @@ func (d *DB) UpsertAdmin(ctx context.Context, u User) (User, bool, error) {
 	); err != nil {
 		return User{}, false, err
 	}
+	// 接管既有账号并提为管理员时,必须吊销它已有的全部会话:否则装机前抢注了
+	// 该用户名的人,手里的旧会话在这一刻直接变成管理员会话。
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, existing.ID); err != nil {
+		return User{}, false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return User{}, false, err
 	}

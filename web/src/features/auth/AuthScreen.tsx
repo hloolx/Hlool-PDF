@@ -65,11 +65,10 @@ export function AuthScreen() {
     if (mode === 'register' && config?.inviteRequired && inviteCode.trim() === '') return setError('请输入邀请码。')
     setBusy(true)
     try {
-      if (mode === 'register') {
-        // 持有临时身份时，注册会就地升级该身份（印章/设置随 uid 保留）。
-        await register(user, password, inviteCode.trim())
-      }
-      const authed = await login(user, password)
+      // 注册成功即持有会话（服务端直接签发 cookie，「注册并登录」一步完成）；
+      // 持有临时身份时，注册会就地升级该身份（印章/设置随 uid 保留）。
+      const authed =
+        mode === 'register' ? await register(user, password, inviteCode.trim()) : await login(user, password)
       setAuthed(authed)
       void bootWorkspace()
     } catch (err) {
@@ -110,6 +109,11 @@ export function AuthScreen() {
                 </Button>
                 <h2 className="text-sm font-medium">邮箱验证码登录</h2>
               </div>
+              {canDismiss && (
+                <p className="mb-3 rounded-lg bg-sunken px-3 py-2 text-[12px] leading-relaxed text-ink-muted">
+                  首次使用的邮箱会自动继承当前临时身份的印章和设置；已注册过的邮箱则进入原账号。
+                </p>
+              )}
               <EmailLogin
                 onSuccess={(user) => {
                   setAuthed(user)
@@ -200,6 +204,11 @@ export function AuthScreen() {
                 )}
                 <OAuthButtons providers={oauthProviders} />
               </div>
+              {canDismiss && (
+                <p className="mt-3 text-center text-[11px] leading-relaxed text-ink-muted">
+                  首次使用的邮箱 / 第三方账号会自动继承当前临时身份的数据。
+                </p>
+              )}
             </>
           )}
         </>

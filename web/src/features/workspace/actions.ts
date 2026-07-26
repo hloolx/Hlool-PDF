@@ -207,12 +207,22 @@ export async function importIntoCurrent(all: File[]) {
       if (loaded) added.push(loaded)
     }
     if (added.length === 0) return
+    // 后端 compose 只接受一个统一的打开密码：把各源的已知密码传过去；
+    // 多个不同密码的源没法一次并入，提前给出明确提示而不是让后端报错。
+    const passwords = new Set(
+      [current.password, ...added.map((f) => f.password)].filter((p): p is string => Boolean(p))
+    )
+    if (passwords.size > 1) {
+      toast('这些 PDF 使用了不同的打开密码，暂不支持一次并入，请分批操作。', { kind: 'error' })
+      return
+    }
+    const password = passwords.size === 1 ? [...passwords][0] : undefined
     const blobs = [current.blob, ...added.map((f) => f.blob)]
     const pages = [
       ...current.pages.map((pg) => ({ file: 0, pageNumber: pg.pageNumber })),
       ...added.flatMap((f, i) => f.pages.map((pg) => ({ file: i + 1, pageNumber: pg.pageNumber })))
     ]
-    const composed = await composePdf(blobs, pages, current.name)
+    const composed = await composePdf(blobs, pages, current.name, password)
     const rebuilt = await rebuildFile(current.fileId, current.name, composed)
     const previous = current
     useEditorStore.getState().replaceFile(rebuilt)
@@ -274,6 +284,32 @@ export async function uploadStamps(files: File[]) {
     })
   } else {
     toast(`已导入 ${uploaded.length} 个印章`, { kind: 'success' })
+  }
+}
+
+/**
+ * 用新图片字节替换一个已有印章（AI 抠图「替换原印章」等场景）。
+ * 顺序必须是：先上传新章 → swapStamp 原位切换引用（已放置的章与骑缝配置保留）→
+ * 再删旧章。先删后传会让 removeStamp 级联清掉页面上所有引用，且上传失败时印章直接丢失。
+ */
+export async function replaceStampImage(stamp: StampAsset, blob: Blob, name: string): Promise<boolean> {
+  useEditorStore.getState().setBusy('正在替换印章…')
+  try {
+    const fresh = await upload<StampAsset>('/api/stamps', blob, name, { stampId: generateStampId() })
+    useEditorStore.getState().upsertStamps([fresh])
+    useEditorStore.getState().swapStamp(stamp.stampId, fresh.stampId)
+    try {
+      await deleteJSON(`/api/stamps/${stamp.stampId}`)
+    } catch {
+      toast('旧印章清理失败，可稍后在印章架手动删除。', { kind: 'error' })
+    }
+    return true
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) requireReauth()
+    else toast(errorText(err), { kind: 'error' })
+    return false
+  } finally {
+    useEditorStore.getState().setBusy('')
   }
 }
 
@@ -368,7 +404,11 @@ export function applyConfigToAllFiles() {
     useEditorStore.getState().setConfig(target.fileId, {
       placements,
       seamEnabled: source.seamEnabled,
-      seam: { ...source.seam }
+      seam: { ...source.seam },
+      // 扫描效果也算配置（hasConfig 把 scanEnabled 计入），一并复制，
+      // 否则「只开了扫描」的配置应用到全部后什么都没带过去。
+      scanEnabled: source.scanEnabled,
+      scanConfig: source.scanConfig ? { ...source.scanConfig } : undefined
     })
     applied++
   }

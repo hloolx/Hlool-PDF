@@ -22,7 +22,10 @@
 | `HLOOL_ALLOW_GUEST` | `true` | 是否允许临时游客身份；后台保存后以 SQLite 中的设置为准 |
 | `HLOOL_MAX_PROCESS_BODY_MB` | `220` | `/api/process`、`/api/compose` 的请求体上限 |
 | `HLOOL_MAX_STAMP_MB` | `20` | 单个印章图片上限 |
+| `HLOOL_MAX_STAMPS_PER_USER` | `200` | 每用户印章数量上限（游客可匿名开号，配额防止灌盘） |
+| `HLOOL_MAX_LIBRARY_MB` | `200` | 每用户印章库总容量上限 |
 | `HLOOL_MAX_CONCURRENT_JOBS` | CPU 核数 | 同时处理的重型 PDF 任务上限（盖章/拼接/图片转 PDF）；超出的请求短暂排队，仍无空位则返回 503。**小内存机器请调低**（每个任务可能瞬时占用源文件数倍内存） |
+| `HLOOL_PROVIDER_ENCRYPTION_SECRET` | 空 | 第三方服务凭据（SMTP 密码、OAuth secret、AI token）的加密密钥。留空时首次启动会在数据目录生成随机密钥文件 `provider-encrypt.key`（0600）并持续使用；显式设置便于多实例共享同一数据库 |
 
 ### S3 后端（设了 `HLOOL_S3_BUCKET` 即启用，兼容 AWS S3 / Cloudflare R2 / MinIO / Backblaze B2）
 

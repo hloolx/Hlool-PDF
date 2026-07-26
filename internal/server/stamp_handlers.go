@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
@@ -98,6 +99,34 @@ func (s *Server) uploadStamp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid stamp id"))
 		return
 	}
+
+	// 每用户配额(数量 + 总字节):游客可零门槛开号,单文件上限挡不住批量灌盘。
+	// 覆盖同 id 的上传只按差额计。
+	existing, err := s.lib.ListStamps(r.Context(), uid(r))
+	if err != nil {
+		writeInternalError(w, "list stamps for quota", err)
+		return
+	}
+	replacing := false
+	var totalBytes int64
+	for _, m := range existing {
+		if m.ID == id {
+			replacing = true
+			continue
+		}
+		totalBytes += m.Size
+	}
+	if !replacing && len(existing) >= s.opts.MaxStampsPerUser {
+		writeCodedError(w, http.StatusBadRequest, "library_quota_exceeded",
+			fmt.Errorf("印章数量已达上限（%d 个），请先删除不用的印章", s.opts.MaxStampsPerUser))
+		return
+	}
+	if totalBytes+int64(len(data)) > s.opts.MaxLibraryBytes {
+		writeCodedError(w, http.StatusBadRequest, "library_quota_exceeded",
+			fmt.Errorf("印章库容量已达上限（%d MB），请先删除不用的印章", s.opts.MaxLibraryBytes>>20))
+		return
+	}
+
 	name := sanitizeStampName(r.FormValue("name"))
 	if name == "" {
 		name = sanitizeStampName(header.Filename)

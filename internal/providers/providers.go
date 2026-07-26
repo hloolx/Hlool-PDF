@@ -58,13 +58,16 @@ type Provider struct {
 type Store struct {
 	db         *sql.DB
 	encryptKey []byte
+	// legacyKeys 只用于解密历史密文(密钥轮换的兜底):加密永远用 encryptKey。
+	legacyKeys [][]byte
 }
 
 // NewStore creates a provider store. encryptionSecret is used to derive the AES
 // key for secret_config_enc; it must be stable across restarts (environment
-// variable or database-stored wrapped key). If empty, secret fields cannot be
-// stored and will fail with an error.
-func NewStore(db *sql.DB, encryptionSecret string) (*Store, error) {
+// variable or a key file in the data directory). If empty, secret fields cannot
+// be stored and will fail with an error. legacySecrets 是历史密钥(如旧版本用
+// 数据目录路径推导的弱密钥):仅用于解密存量密文,重新保存凭据时即换用新钥。
+func NewStore(db *sql.DB, encryptionSecret string, legacySecrets ...string) (*Store, error) {
 	if encryptionSecret == "" {
 		return nil, errors.New("provider encryption secret is required")
 	}
@@ -73,7 +76,14 @@ func NewStore(db *sql.DB, encryptionSecret string) (*Store, error) {
 	// derived key isn't the raw password and resists rainbow tables.
 	salt := []byte("hlool-pdf-provider-encryption-v1")
 	key := pbkdf2.Key([]byte(encryptionSecret), salt, 100000, 32, sha256.New)
-	return &Store{db: db, encryptKey: key}, nil
+	legacy := make([][]byte, 0, len(legacySecrets))
+	for _, secret := range legacySecrets {
+		if secret == "" || secret == encryptionSecret {
+			continue
+		}
+		legacy = append(legacy, pbkdf2.Key([]byte(secret), salt, 100000, 32, sha256.New))
+	}
+	return &Store{db: db, encryptKey: key, legacyKeys: legacy}, nil
 }
 
 // Create inserts a new provider. SecretConfig is encrypted before storage.
@@ -282,29 +292,22 @@ func (s *Store) encryptJSON(v map[string]interface{}) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// decryptJSON reverses encryptJSON.
+// decryptJSON reverses encryptJSON, falling back to legacy keys for ciphertexts
+// written before a key rotation.
 func (s *Store) decryptJSON(encoded string) (map[string]interface{}, error) {
 	ciphertext, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, err
 	}
-
-	block, err := aes.NewCipher(s.encryptKey)
+	plaintext, err := decryptWithKey(s.encryptKey, ciphertext)
 	if err != nil {
-		return nil, err
+		for _, key := range s.legacyKeys {
+			if legacyPlain, legacyErr := decryptWithKey(key, ciphertext); legacyErr == nil {
+				plaintext, err = legacyPlain, nil
+				break
+			}
+		}
 	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(ciphertext) < gcm.NonceSize() {
-		return nil, errors.New("ciphertext too short")
-	}
-
-	nonce, ciphertext := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -314,6 +317,22 @@ func (s *Store) decryptJSON(encoded string) (map[string]interface{}, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func decryptWithKey(key, ciphertext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(ciphertext) < gcm.NonceSize() {
+		return nil, errors.New("ciphertext too short")
+	}
+	nonce, body := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
+	return gcm.Open(nil, nonce, body, nil)
 }
 
 // MaskSecrets returns a Provider with SecretConfig replaced by masked hints.
@@ -341,7 +360,22 @@ func ValidateKind(k Kind) error {
 	}
 }
 
-// GenerateID creates a provider ID from kind and name.
+// GenerateID creates a provider ID from kind and name. 字符集必须能安全充当单个
+// URL 路径段(管理端按 /api/admin/providers/{id} 寻址):名字里的 "/" 等字符若进
+// 入 id,该 provider 将无法通过 API 管理。
 func GenerateID(kind Kind, name string) string {
-	return strings.ToLower(fmt.Sprintf("%s_%s", kind, strings.ReplaceAll(name, " ", "_")))
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteRune('_')
+		}
+	}
+	id := strings.Trim(b.String(), "_-")
+	if id == "" {
+		id = fmt.Sprintf("p%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%s_%s", kind, id)
 }

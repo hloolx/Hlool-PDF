@@ -92,15 +92,15 @@ func TestCountRecentEmailLoginCodes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// 按邮箱匹配。
-	if n, err := svc.CountRecentEmailLoginCodes(ctx, "a@b.com", "9.9.9.9", 15*time.Minute); err != nil || n != 3 {
-		t.Fatalf("count by email = (%d, %v), want 3", n, err)
+	// 邮箱与 IP 两个维度分开统计,互不放大。
+	if byEmail, byIP, err := svc.CountRecentEmailLoginCodes(ctx, "a@b.com", "9.9.9.9", 15*time.Minute); err != nil || byEmail != 3 || byIP != 0 {
+		t.Fatalf("count = (%d, %d, %v), want (3, 0)", byEmail, byIP, err)
 	}
-	// 按 IP 匹配(跨邮箱累计,防止换邮箱刷)。
-	if n, err := svc.CountRecentEmailLoginCodes(ctx, "x@y.com", "1.1.1.1", 15*time.Minute); err != nil || n != 5 {
-		t.Fatalf("count by ip = (%d, %v), want 5", n, err)
+	// 按 IP 跨邮箱累计(防止换邮箱刷),但不影响该邮箱自身的计数。
+	if byEmail, byIP, err := svc.CountRecentEmailLoginCodes(ctx, "x@y.com", "1.1.1.1", 15*time.Minute); err != nil || byEmail != 0 || byIP != 5 {
+		t.Fatalf("count = (%d, %d, %v), want (0, 5)", byEmail, byIP, err)
 	}
-	if n, err := svc.CountRecentEmailLoginCodes(ctx, "x@y.com", "9.9.9.9", 15*time.Minute); err != nil || n != 0 {
-		t.Fatalf("count unrelated = (%d, %v), want 0", n, err)
+	if byEmail, byIP, err := svc.CountRecentEmailLoginCodes(ctx, "x@y.com", "9.9.9.9", 15*time.Minute); err != nil || byEmail != 0 || byIP != 0 {
+		t.Fatalf("count unrelated = (%d, %d, %v), want (0, 0)", byEmail, byIP, err)
 	}
 }

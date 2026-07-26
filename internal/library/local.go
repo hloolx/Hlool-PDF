@@ -74,6 +74,10 @@ func (s *LocalStore) PutStamp(_ context.Context, uid string, meta StampMeta, dat
 	if !safeSegment(uid) || !safeSegment(meta.ID) {
 		return errInvalidID
 	}
+	// 与 PurgeUser 互斥:否则游客焚毁的瞬间并发上传会在 RemoveAll 之后重建目录,
+	// 留下永远无人清理的孤儿文件。
+	unlock := s.locks.lock(uid)
+	defer unlock()
 	if err := os.MkdirAll(s.stampsDir(uid), 0o700); err != nil {
 		return err
 	}
@@ -152,6 +156,8 @@ func (s *LocalStore) DeleteStamp(_ context.Context, uid, id string) error {
 	if !safeSegment(uid) || !safeSegment(id) {
 		return errInvalidID
 	}
+	unlock := s.locks.lock(uid)
+	defer unlock()
 	_ = os.Remove(s.stampPath(uid, id))
 	_ = os.Remove(s.stampMetaPath(uid, id))
 	return nil
@@ -233,22 +239,38 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 }
 
 // keyedMutex provides per-key mutual exclusion without cross-key contention.
+// 条目带引用计数,空闲即回收:游客流水(每天成百上千个一次性 uid)不会让 map
+// 无限增长。
 type keyedMutex struct {
 	mu sync.Mutex
-	m  map[string]*sync.Mutex
+	m  map[string]*keyedMutexEntry
+}
+
+type keyedMutexEntry struct {
+	mu   sync.Mutex
+	refs int
 }
 
 func (k *keyedMutex) lock(key string) func() {
 	k.mu.Lock()
 	if k.m == nil {
-		k.m = map[string]*sync.Mutex{}
+		k.m = map[string]*keyedMutexEntry{}
 	}
-	mu, ok := k.m[key]
+	entry, ok := k.m[key]
 	if !ok {
-		mu = &sync.Mutex{}
-		k.m[key] = mu
+		entry = &keyedMutexEntry{}
+		k.m[key] = entry
 	}
+	entry.refs++
 	k.mu.Unlock()
-	mu.Lock()
-	return mu.Unlock
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		k.mu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(k.m, key)
+		}
+		k.mu.Unlock()
+	}
 }

@@ -15,7 +15,12 @@ export async function loadSettings(): Promise<void> {
   lastSynced = JSON.stringify(librarySettings(useEditorStore.getState()))
 }
 
-/** 订阅库设置变更，防抖推送到服务端（带版本乐观并发，冲突时本地覆盖重试一次）。 */
+/**
+ * 订阅库设置变更，防抖推送到服务端（带版本乐观并发，冲突时本地覆盖重试一次）。
+ * 注意：冲突处理是「后写覆盖」而非合并——多端同时改偏好时，后保存的一端赢。
+ * 对印章别名/默认尺寸这类低价值偏好是有意的取舍；若未来存入更重要的数据，
+ * 需要改成字段级合并再提交。
+ */
 export function startSettingsSync(): void {
   if (started) return
   started = true

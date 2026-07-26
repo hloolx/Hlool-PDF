@@ -540,18 +540,58 @@ func seamPlacement(page storage.PageInfo, piece seamPiece, seal SeamSeal) (x, y,
 	return x, y, widthPt / float64(piece.WidthPx)
 }
 
+// selectedPages 解析骑缝章的页面范围。必须与 HTTP 层校验共用同一个解析器
+// (ParsePageScope):否则会出现「校验放行、执行拒绝」的两套语义。
 func selectedPages(expr string, pageCount int) ([]int, error) {
+	return ParsePageScope(expr, pageCount)
+}
+
+// ParsePageScope 解析 "1,3-5" / "all" / 空串(=全部) 形式的页码表达式,返回升序去
+// 重的页码列表。校验层(internal/server)与执行层(本包)共用此实现。
+func ParsePageScope(expr string, pageCount int) ([]int, error) {
 	expr = strings.TrimSpace(expr)
 	if expr == "" || strings.EqualFold(expr, "all") {
-		expr = "1-" + fmt.Sprint(pageCount)
+		pages := make([]int, pageCount)
+		for i := range pages {
+			pages[i] = i + 1
+		}
+		return pages, nil
 	}
-	selection, err := api.ParsePageSelection(expr)
-	if err != nil {
-		return nil, err
-	}
-	set, err := api.PagesForPageSelection(pageCount, selection, true, false)
-	if err != nil {
-		return nil, err
+	set := map[int]struct{}{}
+	for _, raw := range strings.Split(expr, ",") {
+		part := strings.TrimSpace(raw)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "-") {
+			bounds := strings.SplitN(part, "-", 2)
+			start, err := parsePositiveInt(bounds[0])
+			if err != nil {
+				return nil, fmt.Errorf("invalid page range %q", part)
+			}
+			end, err := parsePositiveInt(bounds[1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid page range %q", part)
+			}
+			if end < start {
+				start, end = end, start
+			}
+			for page := start; page <= end; page++ {
+				if page < 1 || page > pageCount {
+					return nil, fmt.Errorf("page %d is out of range", page)
+				}
+				set[page] = struct{}{}
+			}
+			continue
+		}
+		page, err := parsePositiveInt(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid page %q", part)
+		}
+		if page < 1 || page > pageCount {
+			return nil, fmt.Errorf("page %d is out of range", page)
+		}
+		set[page] = struct{}{}
 	}
 	pages := make([]int, 0, len(set))
 	for page := range set {
@@ -559,6 +599,24 @@ func selectedPages(expr string, pageCount int) ([]int, error) {
 	}
 	sort.Ints(pages)
 	return pages, nil
+}
+
+func parsePositiveInt(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("empty number")
+	}
+	if len(value) > 7 { // 页码不可能超过 7 位;同时防住超长数字串的整型回绕
+		return 0, fmt.Errorf("number too long")
+	}
+	n := 0
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("invalid number")
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n, nil
 }
 
 func pageDimsFile(path string, conf *model.Configuration) ([]types.Dim, error) {
@@ -586,8 +644,16 @@ func normalizedOpacity(opacity float64) float64 {
 	return opacity
 }
 
+// watermarkDesc 生成 pdfcpu 的水印描述串。rotation 参数使用前端约定(CSS/画布,
+// 正角 = 屏幕顺时针);pdfcpu 的 rot 是数学约定(正角 = 纸面逆时针,见其
+// CalcTransformMatrix 的标准 sin/cos 矩阵),因此这里取负,保证「预览即产物」的
+// 旋转方向一致。
 func watermarkDesc(x, y, scale, rotation, opacity float64) string {
-	return fmt.Sprintf("pos:bl, off:%0.3f %0.3f, scale:%0.6f abs, rot:%0.3f, op:%0.3f", x, y, scale, rotation, opacity)
+	rot := -rotation
+	if rot == 0 {
+		rot = 0 // 归一化 -0.0,避免输出 "rot:-0.000"
+	}
+	return fmt.Sprintf("pos:bl, off:%0.3f %0.3f, scale:%0.6f abs, rot:%0.3f, op:%0.3f", x, y, scale, rot, opacity)
 }
 
 func loadRGBA(path string) (*image.RGBA, error) {

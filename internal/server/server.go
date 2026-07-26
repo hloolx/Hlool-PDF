@@ -35,9 +35,11 @@ const (
 	maxPagesPerSeamSeal = 500
 	maxPasswordLength   = 256
 	maxPDFPages         = 1000
-	maxComposePages     = 2000
-	maxComposeFiles     = 200
-	maxOutputNameRunes  = 110
+	// 拼接产物页数恒等于请求页数,上限必须与 maxPDFPages 对齐:否则会先合成完
+	// 再被产物页数检查拒绝,白烧一轮 CPU。
+	maxComposePages    = maxPDFPages
+	maxComposeFiles    = 200
+	maxOutputNameRunes = 110
 )
 
 // Options carries the HTTP-layer settings derived from the runtime config.
@@ -55,6 +57,10 @@ type Options struct {
 	// SetupToken 是首次安装向导的远程初始化令牌(无管理员时由 main 生成并打进日志);
 	// 为空表示只允许本机完成初始化。
 	SetupToken string
+	// MaxStampsPerUser / MaxLibraryBytes 是每用户印章库配额(数量 / 总字节)。
+	// 匿名游客可零门槛开号,没有配额就等于把磁盘/S3 拱手让人填满。
+	MaxStampsPerUser int
+	MaxLibraryBytes  int64
 }
 
 // Server bundles the auth service, the pluggable library backend and the web UI.
@@ -71,6 +77,8 @@ type Server struct {
 	newMailSender func(providers.Provider) mailSender
 	// installedFlag 是「已存在管理员」的正向缓存(见 needsInstall)。
 	installedFlag atomic.Bool
+	// mattingLimiter 按 uid 限制 AI 抠图调用次数(外部付费 API,防刷)。
+	mattingLimiter *rateCounter
 }
 
 // New builds a Server.
@@ -84,6 +92,12 @@ func New(authSvc *auth.Service, lib library.Store, providerStore *providers.Stor
 	if opts.MaxConcurrentJobs <= 0 {
 		opts.MaxConcurrentJobs = runtime.GOMAXPROCS(0)
 	}
+	if opts.MaxStampsPerUser <= 0 {
+		opts.MaxStampsPerUser = 200
+	}
+	if opts.MaxLibraryBytes <= 0 {
+		opts.MaxLibraryBytes = 200 << 20
+	}
 	// Preserve the old zero-value server behavior: password registration is open
 	// unless explicitly disabled by config/admin settings, while guest access
 	// stays off for tests that construct Options{} directly.
@@ -93,14 +107,15 @@ func New(authSvc *auth.Service, lib library.Store, providerStore *providers.Stor
 		opts.AuthDefaults.GuestEnabled = opts.AllowGuest
 	}
 	return &Server{
-		auth:          authSvc,
-		lib:           lib,
-		providerStore: providerStore,
-		webFS:         webFS,
-		opts:          opts,
-		jobSem:        make(chan struct{}, opts.MaxConcurrentJobs),
-		jobQueueWait:  10 * time.Second,
-		oauthStates:   newOAuthStateStore(),
+		auth:           authSvc,
+		lib:            lib,
+		providerStore:  providerStore,
+		webFS:          webFS,
+		opts:           opts,
+		jobSem:         make(chan struct{}, opts.MaxConcurrentJobs),
+		jobQueueWait:   10 * time.Second,
+		oauthStates:    newOAuthStateStore(),
+		mattingLimiter: newRateCounter(30, time.Hour),
 	}
 }
 

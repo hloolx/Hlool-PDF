@@ -23,8 +23,10 @@ const (
 	emailCodeTTL         = 10 * time.Minute
 	emailCodeMaxAttempts = 5
 	emailRateWindow      = 15 * time.Minute
-	emailRateMaxSends    = 5
-	maxEmailLength       = 254
+	// 每邮箱与每 IP 的发送上限分开计(见 CountRecentEmailLoginCodes 的注释)。
+	emailRateMaxSends      = 5
+	emailRateMaxSendsPerIP = 15
+	maxEmailLength         = 254
 )
 
 // mailSender 是发验证码邮件的最小接口:生产走 providers.MailClient,测试注入假实现。
@@ -56,12 +58,12 @@ func (s *Server) emailSendCode(w http.ResponseWriter, r *http.Request) {
 		writeCodedError(w, http.StatusBadRequest, "email_login_disabled", errors.New("邮箱登录未启用"))
 		return
 	}
-	n, err := s.auth.CountRecentEmailLoginCodes(r.Context(), email, s.clientIP(r), emailRateWindow)
+	byEmail, byIP, err := s.auth.CountRecentEmailLoginCodes(r.Context(), email, s.clientIP(r), emailRateWindow)
 	if err != nil {
 		writeInternalError(w, "email rate limit", err)
 		return
 	}
-	if n >= emailRateMaxSends {
+	if byEmail >= emailRateMaxSends || byIP >= emailRateMaxSendsPerIP {
 		writeCodedError(w, http.StatusTooManyRequests, "rate_limited", errors.New("发送太频繁，请稍后再试"))
 		return
 	}
@@ -118,12 +120,18 @@ func (s *Server) emailVerify(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, "auth settings", err)
 		return
 	}
-	user, token, expires, err := s.auth.LoginOrRegisterExternalWithPolicy(r.Context(), auth.ExternalIdentity{
+	// 与密码注册同一套语义:持有游客会话时,首次出现的邮箱身份就地升级该游客
+	// (印章/设置随 uid 保留),而不是另开新号把游客库丢给 24h 焚毁。
+	claimUID := ""
+	if current, err := s.auth.Authenticate(r.Context(), r); err == nil && current.IsGuest {
+		claimUID = current.ID
+	}
+	user, token, expires, err := s.auth.LoginOrRegisterExternalClaiming(r.Context(), auth.ExternalIdentity{
 		Provider:    "email",
 		Subject:     email,
 		DisplayName: emailLocalPart(email),
 		Email:       email,
-	}, settings)
+	}, settings, claimUID)
 	switch {
 	case err == nil:
 		s.auth.SetSessionCookie(w, token, expires)

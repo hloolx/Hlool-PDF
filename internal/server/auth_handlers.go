@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"hlool-pdf/internal/auth"
@@ -51,17 +52,24 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	// of being stranded under a throwaway account.
 	if current, err := s.auth.Authenticate(r.Context(), r); err == nil && current.IsGuest {
 		user, err := s.auth.UpgradeGuestWithPolicy(r.Context(), s.clientIP(r), current.ID, c.Username, c.Password, c.InviteCode, settings)
-		s.writeRegisterResult(w, "register-claim", user, err)
+		s.writeRegisterResult(w, r, "register-claim", user, err)
 		return
 	}
 	user, err := s.auth.RegisterWithPolicy(r.Context(), s.clientIP(r), c.Username, c.Password, c.InviteCode, settings)
-	s.writeRegisterResult(w, "register", user, err)
+	s.writeRegisterResult(w, r, "register", user, err)
 }
 
 // writeRegisterResult maps a Register/UpgradeGuest outcome to an HTTP response.
-func (s *Server) writeRegisterResult(w http.ResponseWriter, op string, user auth.User, err error) {
+// 成功即签发正式会话(「注册并登录」),游客升级场景还顺带把 24h 短命的游客
+// cookie 换成全长会话;签发失败不影响已建好的账号,退化为让用户手动登录。
+func (s *Server) writeRegisterResult(w http.ResponseWriter, r *http.Request, op string, user auth.User, err error) {
 	switch {
 	case err == nil:
+		if token, expires, serr := s.auth.IssueSession(r.Context(), user.ID); serr == nil {
+			s.auth.SetSessionCookie(w, token, expires)
+		} else {
+			log.Printf("%s: issue session: %v", op, serr)
+		}
 		writeJSON(w, http.StatusCreated, newUserView(user))
 	case errors.Is(err, auth.ErrUsernameTaken):
 		writeError(w, http.StatusConflict, errors.New("该用户名已被注册"))

@@ -293,6 +293,47 @@ func (d *DB) UpgradeGuest(ctx context.Context, id, username, passwordHash string
 	return nil
 }
 
+// ClaimGuestWithIdentity atomically converts guest id into a registered
+// federated account (keeping the id, and with it the user's library) and links
+// (provider, subject) to it. Returns ErrNotGuest when id is not an upgradeable
+// guest, ErrUsernameTaken on a username collision, or ErrIdentityLinked when the
+// identity is already mapped to some account.
+func (d *DB) ClaimGuestWithIdentity(ctx context.Context, id, username, passwordHash, provider, subject string, now time.Time) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE users SET username = ?, password_hash = ?, is_guest = 0 WHERE id = ? AND is_guest = 1`,
+		username, passwordHash, id,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return ErrUsernameTaken
+		}
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotGuest
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO identities (provider, subject, user_id, created_at) VALUES (?, ?, ?, ?)`,
+		provider, subject, id, now.Unix(),
+	); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return ErrIdentityLinked
+		}
+		return err
+	}
+	return tx.Commit()
+}
+
 // UserByUsername looks up an account by case-insensitive username.
 func (d *DB) UserByUsername(ctx context.Context, username string) (User, error) {
 	row := d.db.QueryRowContext(ctx,

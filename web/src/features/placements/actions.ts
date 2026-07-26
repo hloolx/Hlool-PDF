@@ -198,9 +198,13 @@ export function rotateSelected(degDelta: number, snap = false) {
 }
 
 /**
- * 页面顺时针旋转 deg（90/180/270）后，把该页上的一个印章随纸张一起变换：
- * 中心点按页面旋转映射、宽高在 90/270 时对调、自身角度加上页面旋转量。
- * 坐标用旋转前的页面几何（oldPage）计算，结果夹在旋转后的页面内。
+ * 页面顺时针旋转 deg（90/180/270）后，把该页上的一个印章随纸张一起变换。
+ * 服务端烘录用的是 pdfcpu 的 /Rotate 内化矩阵（PDF 的 /Rotate 定义为顺时针），
+ * 其点映射为：
+ *   90°:  (x,y) → (y, W−x)    180°: (x,y) → (W−x, H−y)    270°: (x,y) → (H−y, x)
+ * 印章只映射中心点并叠加旋转角；宽高保持不变 —— placement 的 w/h 描述的是
+ * 未旋转的图片框（渲染时先画框再绕中心转），对调 w/h 会破坏宽高比：预览变形，
+ * 生成时也会被后端的宽高比校验（±2pt）拒绝。
  */
 export function rotatePlacementOnPage(placement: Placement, oldPage: PageInfo, deg: number): Placement {
   const r = ((deg % 360) + 360) % 360
@@ -212,36 +216,25 @@ export function rotatePlacementOnPage(placement: Placement, oldPage: PageInfo, d
 
   let ncx: number
   let ncy: number
-  let nw: number
-  let nh: number
-  if (r === 180) {
-    // 原点左下坐标系：(x,y) → (W-x, H-y)，尺寸不变。
-    ncx = W - cx
-    ncy = H - cy
-    nw = placement.widthPt
-    nh = placement.heightPt
-  } else if (r === 90) {
-    // 顺时针 90°：(x,y) → (H-y, x)，新页 H×W，宽高对调。
-    ncx = H - cy
-    ncy = cx
-    nw = placement.heightPt
-    nh = placement.widthPt
-  } else {
-    // 顺时针 270°（= 逆时针 90°）：(x,y) → (y, W-x)，新页 H×W，宽高对调。
+  if (r === 90) {
     ncx = cy
     ncy = W - cx
-    nw = placement.heightPt
-    nh = placement.widthPt
+  } else if (r === 180) {
+    ncx = W - cx
+    ncy = H - cy
+  } else {
+    ncx = H - cy
+    ncy = cx
   }
   const newW = r === 180 ? W : H
   const newH = r === 180 ? H : W
+  const w = placement.widthPt
+  const h = placement.heightPt
   const rotation = ((placement.rotation + r + 540) % 360) - 180
   return {
     ...placement,
-    xPt: clamp(ncx - nw / 2, 0, Math.max(0, newW - nw)),
-    yPt: clamp(ncy - nh / 2, 0, Math.max(0, newH - nh)),
-    widthPt: nw,
-    heightPt: nh,
+    xPt: clamp(ncx - w / 2, 0, Math.max(0, newW - w)),
+    yPt: clamp(ncy - h / 2, 0, Math.max(0, newH - h)),
     rotation
   }
 }

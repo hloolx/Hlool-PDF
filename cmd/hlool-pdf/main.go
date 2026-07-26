@@ -37,6 +37,26 @@ func newSetupToken() (string, error) {
 	return hexStr[:8] + "-" + hexStr[8:16] + "-" + hexStr[16:24] + "-" + hexStr[24:], nil
 }
 
+// loadOrCreateProviderSecret 读取(或首次生成)provider 加密密钥文件:32 字节随机
+// 数的 hex,权限 0600。让未配置 HLOOL_PROVIDER_ENCRYPTION_SECRET 的部署也拿到
+// 不可预测且跨重启稳定的密钥。
+func loadOrCreateProviderSecret(path string) (string, error) {
+	if data, err := os.ReadFile(path); err == nil {
+		if secret := strings.TrimSpace(string(data)); secret != "" {
+			return secret, nil
+		}
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	secret := hex.EncodeToString(raw)
+	if err := os.WriteFile(path, []byte(secret+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	return secret, nil
+}
+
 func main() {
 	addrFlag := flag.String("addr", "", "override HTTP listen address")
 	dataDirFlag := flag.String("data-dir", "", "override data directory")
@@ -112,13 +132,18 @@ func main() {
 
 	// Initialize provider store. Use a stable encryption secret from environment.
 	encryptSecret := os.Getenv("HLOOL_PROVIDER_ENCRYPTION_SECRET")
+	legacySecret := ""
 	if encryptSecret == "" {
-		// Generate a default secret from data directory path for single-user setups.
-		// Production deployments should set HLOOL_PROVIDER_ENCRYPTION_SECRET explicitly.
-		encryptSecret = cfg.DataDir + "-hlool-providers-v1"
-		log.Printf("warning: HLOOL_PROVIDER_ENCRYPTION_SECRET not set; using derived key (set it explicitly for production)")
+		// 未显式配置:用数据目录里首启生成的随机密钥文件(0600)。旧版本曾用
+		// 「数据目录路径」推导密钥——路径可预测,等于明文;把它保留为遗留解密
+		// 兜底,存量密文仍可读,管理员重新保存凭据时即换用新钥。
+		legacySecret = cfg.DataDir + "-hlool-providers-v1"
+		encryptSecret, err = loadOrCreateProviderSecret(filepath.Join(cfg.DataDir, "provider-encrypt.key"))
+		if err != nil {
+			log.Fatalf("init provider encryption key: %v", err)
+		}
 	}
-	providerStore, err := providers.NewStore(db.DB(), encryptSecret)
+	providerStore, err := providers.NewStore(db.DB(), encryptSecret, legacySecret)
 	if err != nil {
 		log.Fatalf("init provider store: %v", err)
 	}
@@ -171,6 +196,8 @@ func main() {
 			MaxProcessBodyBytes: cfg.MaxProcessBodyBytes,
 			MaxStampBytes:       cfg.MaxStampBytes,
 			MaxConcurrentJobs:   cfg.MaxConcurrentJobs,
+			MaxStampsPerUser:    cfg.MaxStampsPerUser,
+			MaxLibraryBytes:     cfg.MaxLibraryBytes,
 			SetupToken:          setupToken,
 		}).Handler(),
 		ReadHeaderTimeout: 15 * time.Second,

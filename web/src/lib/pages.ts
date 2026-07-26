@@ -8,7 +8,9 @@ export function emptyPageExpression(): PageExpression {
 }
 
 export function normalizePageExpr(value: string) {
-  const text = value.trim()
+  // 中文输入法默认打全角逗号「，」：后端解析器只认半角，发送前统一归一，
+  // 否则会出现「前端校验通过、后端 400」的两层语义。
+  const text = value.replace(/，/g, ',').trim()
   return text === '' || text === '全部' || text.toLowerCase() === 'all' ? 'all' : text
 }
 

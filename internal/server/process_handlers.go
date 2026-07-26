@@ -450,10 +450,13 @@ func validateProcessRequest(req processParams, pages []storage.PageInfo, metas m
 				return errors.New("invalid seam seal side")
 			}
 		}
-		if len(seam.Pages) > 128 {
+		// 删页/重排后前端 remap 出的离散页码列表可能很长(交替选中最坏
+		// "1,3,5,…"),4096 足够覆盖 1000 页文档的任何选择;解析是 O(n) 的,
+		// 这个上限只是防御性兜底。
+		if len(seam.Pages) > 4096 {
 			return errors.New("seam seal page expression is too long")
 		}
-		pages, err := parsePageScope(seam.Pages, len(pages))
+		pages, err := pdfcore.ParsePageScope(seam.Pages, len(pages))
 		if err != nil {
 			return err
 		}
@@ -483,73 +486,6 @@ func validateProcessRequest(req processParams, pages []storage.PageInfo, metas m
 		}
 	}
 	return nil
-}
-
-func parsePageScope(expr string, pageCount int) ([]int, error) {
-	expr = strings.TrimSpace(expr)
-	if expr == "" || strings.EqualFold(expr, "all") {
-		pages := make([]int, pageCount)
-		for i := range pages {
-			pages[i] = i + 1
-		}
-		return pages, nil
-	}
-	pages := map[int]struct{}{}
-	for _, raw := range strings.Split(expr, ",") {
-		part := strings.TrimSpace(raw)
-		if part == "" {
-			continue
-		}
-		if strings.Contains(part, "-") {
-			bounds := strings.SplitN(part, "-", 2)
-			start, err := parsePositiveInt(bounds[0])
-			if err != nil {
-				return nil, fmt.Errorf("invalid page range %q", part)
-			}
-			end, err := parsePositiveInt(bounds[1])
-			if err != nil {
-				return nil, fmt.Errorf("invalid page range %q", part)
-			}
-			if end < start {
-				start, end = end, start
-			}
-			for page := start; page <= end; page++ {
-				if page < 1 || page > pageCount {
-					return nil, fmt.Errorf("page %d is out of range", page)
-				}
-				pages[page] = struct{}{}
-			}
-			continue
-		}
-		page, err := parsePositiveInt(part)
-		if err != nil {
-			return nil, fmt.Errorf("invalid page %q", part)
-		}
-		if page < 1 || page > pageCount {
-			return nil, fmt.Errorf("page %d is out of range", page)
-		}
-		pages[page] = struct{}{}
-	}
-	out := make([]int, 0, len(pages))
-	for page := range pages {
-		out = append(out, page)
-	}
-	return out, nil
-}
-
-func parsePositiveInt(value string) (int, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0, errors.New("empty number")
-	}
-	n := 0
-	for _, r := range value {
-		if r < '0' || r > '9' {
-			return 0, errors.New("invalid number")
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n, nil
 }
 
 /* ---------------- file / streaming helpers ---------------- */

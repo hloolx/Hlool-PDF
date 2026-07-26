@@ -239,6 +239,13 @@ func (s *Service) Login(ctx context.Context, ip, username, password string) (Use
 	return user, rawToken, expires, nil
 }
 
+// IssueSession mints a full-length login session for userID. Handlers that
+// authenticate through a side channel (e.g. /auth/register upgrading a guest)
+// use it so "register" means "registered and logged in".
+func (s *Service) IssueSession(ctx context.Context, userID string) (string, time.Time, error) {
+	return s.issueSession(ctx, userID, sessionTTL)
+}
+
 // issueSession mints a fresh session for userID and returns the raw token and
 // its expiry. Login, guest creation and federated login all funnel through here,
 // so session policy (token generation, hashing, TTL) lives in exactly one place.
@@ -282,6 +289,15 @@ func (s *Service) LoginOrRegisterExternal(ctx context.Context, ident ExternalIde
 // Already-linked identities may still log in even when new third-party
 // registration is closed.
 func (s *Service) LoginOrRegisterExternalWithPolicy(ctx context.Context, ident ExternalIdentity, settings AuthSettings) (User, string, time.Time, error) {
+	return s.LoginOrRegisterExternalClaiming(ctx, ident, settings, "")
+}
+
+// LoginOrRegisterExternalClaiming 与 LoginOrRegisterExternalWithPolicy 相同,但当
+// 该第三方身份是首次出现、且 claimUID 指向一个可升级的游客时,就地把游客账号转正
+// (uid 不变,印章库随之保留)并绑定身份,而不是另开新号。这让邮箱验证码 / OAuth
+// 登录与密码注册拥有同一套「游客数据自动保留」语义。身份已存在(回头客)时照常
+// 登录既有账号——那是用户自己的旧账号,不能被游客数据覆盖。
+func (s *Service) LoginOrRegisterExternalClaiming(ctx context.Context, ident ExternalIdentity, settings AuthSettings, claimUID string) (User, string, time.Time, error) {
 	provider := strings.ToLower(strings.TrimSpace(ident.Provider))
 	subject := strings.TrimSpace(ident.Subject)
 	if provider == "" || subject == "" {
@@ -296,7 +312,17 @@ func (s *Service) LoginOrRegisterExternalWithPolicy(ctx context.Context, ident E
 		if !settings.ThirdPartyRegisterEnabled {
 			return User{}, "", time.Time{}, ErrRegistrationClosed
 		}
-		user, err = s.provisionExternalUser(ctx, provider, subject, ident.DisplayName, ident.InviteCode, settings.InviteRequired)
+		// 邀请制实例不做游客转正(第三方登录入口没有邀请码输入),
+		// 走常规开号路径以给出一致的邀请码错误。
+		if claimUID != "" && !settings.InviteRequired {
+			user, err = s.claimGuestExternal(ctx, claimUID, provider, subject, ident.DisplayName)
+			if errors.Is(err, ErrNotGuest) {
+				// 不是可升级的游客(已转正/已被清扫):退回常规开号。
+				user, err = s.provisionExternalUser(ctx, provider, subject, ident.DisplayName, ident.InviteCode, settings.InviteRequired)
+			}
+		} else {
+			user, err = s.provisionExternalUser(ctx, provider, subject, ident.DisplayName, ident.InviteCode, settings.InviteRequired)
+		}
 	}
 	if err != nil {
 		return User{}, "", time.Time{}, err
@@ -307,6 +333,35 @@ func (s *Service) LoginOrRegisterExternalWithPolicy(ctx context.Context, ident E
 		return User{}, "", time.Time{}, err
 	}
 	return user, token, expires, nil
+}
+
+// claimGuestExternal 把游客 uid 就地转成联合登录账号:同一 uid(库随之保留)、
+// 生成的用户名、不可用密码哈希,身份在同一事务里绑定。生成用户名撞车时换后缀重
+// 试;并发时若身份已被别的请求绑走,收养胜者的账号。
+func (s *Service) claimGuestExternal(ctx context.Context, uid, provider, subject, displayName string) (User, error) {
+	hash, err := unusablePasswordHash()
+	if err != nil {
+		return User{}, err
+	}
+	base := sanitizeExternalName(displayName)
+	for attempt := 0; attempt < 6; attempt++ {
+		username, err := externalUsername(base, attempt)
+		if err != nil {
+			return User{}, err
+		}
+		err = s.db.ClaimGuestWithIdentity(ctx, uid, username, hash, provider, subject, s.now().UTC())
+		switch {
+		case err == nil:
+			return s.db.UserByID(ctx, uid)
+		case errors.Is(err, ErrIdentityLinked):
+			return s.db.UserByIdentity(ctx, provider, subject)
+		case errors.Is(err, ErrUsernameTaken):
+			continue
+		default:
+			return User{}, err
+		}
+	}
+	return User{}, ErrUsernameTaken
 }
 
 func (s *Service) EnsureAdmin(ctx context.Context, username, password string) (User, bool, error) {

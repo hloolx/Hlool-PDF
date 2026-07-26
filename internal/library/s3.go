@@ -154,6 +154,9 @@ func (s *S3Store) PutStamp(ctx context.Context, uid string, meta StampMeta, data
 	if !safeSegment(uid) || !safeSegment(meta.ID) {
 		return errInvalidID
 	}
+	// 与 PurgeUser 互斥:防止游客焚毁扫过 List 之后又并发写入新对象,留下孤儿。
+	unlock := s.locks.lock(uid)
+	defer unlock()
 	if err := s.putObject(ctx, s.stampKey(uid, meta.ID), meta.Mime, data); err != nil {
 		return err
 	}
@@ -240,6 +243,8 @@ func (s *S3Store) DeleteStamp(ctx context.Context, uid, id string) error {
 	if !safeSegment(uid) || !safeSegment(id) {
 		return errInvalidID
 	}
+	unlock := s.locks.lock(uid)
+	defer unlock()
 	for _, key := range []string{s.stampKey(uid, id), s.stampMetaKey(uid, id)} {
 		if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: aws.String(s.bucket),

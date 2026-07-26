@@ -37,16 +37,20 @@ func (s *Service) StoreEmailLoginCode(ctx context.Context, email, codeHash, ip s
 	return expires, nil
 }
 
-// CountRecentEmailLoginCodes 统计频控窗口内该邮箱或该 IP 生成过的验证码条数。
-func (s *Service) CountRecentEmailLoginCodes(ctx context.Context, email, ip string, window time.Duration) (int, error) {
+// CountRecentEmailLoginCodes 分别统计频控窗口内「该邮箱」与「该 IP」生成过的验证
+// 码条数。两个维度必须分开计:合并成 OR 会让一个 NAT 出口 IP 上的 5 次发送封锁
+// 全办公室所有邮箱,也让针对单一邮箱的骚扰顺带波及无关 IP 的额度。
+func (s *Service) CountRecentEmailLoginCodes(ctx context.Context, email, ip string, window time.Duration) (byEmail, byIP int, err error) {
 	cutoff := s.now().Add(-window).Unix()
-	var n int
-	err := s.db.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM email_verification_codes
-		  WHERE purpose = ? AND (email = ? OR created_ip = ?) AND created_at > ?`,
-		emailCodePurposeLogin, email, ip, cutoff,
-	).Scan(&n)
-	return n, err
+	err = s.db.db.QueryRowContext(ctx,
+		`SELECT
+		    COUNT(CASE WHEN email = ? THEN 1 END),
+		    COUNT(CASE WHEN created_ip = ? THEN 1 END)
+		   FROM email_verification_codes
+		  WHERE purpose = ? AND created_at > ?`,
+		email, ip, emailCodePurposeLogin, cutoff,
+	).Scan(&byEmail, &byIP)
+	return byEmail, byIP, err
 }
 
 // ConsumeEmailLoginCode 校验并单次消费该邮箱最新一条验证码。

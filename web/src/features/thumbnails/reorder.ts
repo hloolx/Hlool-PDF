@@ -1,4 +1,4 @@
-import { errorText } from '../../lib/api'
+import { ApiError, errorText } from '../../lib/api'
 import type { FileConfig, PDFFile } from '../../lib/types'
 import { emptyConfig } from '../../lib/types'
 import { normalizePageExpr, pagesToExpression, parsePageExpression } from '../../lib/pages'
@@ -6,6 +6,7 @@ import { switchFile, useEditorStore } from '../../state/store'
 import { toast } from '../../state/toasts'
 import { composePdf, rebuildFile, type ComposePageRef } from '../workspace/actions'
 import { rotatePlacementOnPage } from '../placements/actions'
+import { requireReauth } from '../auth/useAuth'
 
 /** 一个输出页：来自当前文件的 src 旧页码，按 rotate（顺时针度数，0/90/180/270）旋转。 */
 export type OutPage = { src: number; rotate?: number }
@@ -104,7 +105,9 @@ async function recompose(
     useEditorStore.temporal.getState().clear()
     return { ok: true, restore }
   } catch (err) {
-    toast(errorText(err), { kind: 'error' })
+    // 与生成/上传流程一致：会话失效不只弹提示，还要退回登录页。
+    if (err instanceof ApiError && err.status === 401) requireReauth()
+    else toast(errorText(err), { kind: 'error' })
     return { ok: false, restore }
   } finally {
     useEditorStore.getState().setBusy('')

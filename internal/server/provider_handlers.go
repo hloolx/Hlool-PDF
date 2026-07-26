@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"hlool-pdf/internal/providers"
 )
@@ -33,9 +32,18 @@ func (s *Server) adminProviders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, masked)
 }
 
-// adminProviderByID handles CRUD operations on a single provider.
+// adminProviderByID handles CRUD operations on a single provider, plus the
+// POST /api/admin/providers/{id}/test connectivity check.
 func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 	id, rest := splitIDPath(r.URL.Path, "/api/admin/providers/")
+	if rest == "test" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		s.providerTest(w, r, id)
+		return
+	}
 	if rest != "" {
 		writeError(w, http.StatusNotFound, errors.New("provider not found"))
 		return
@@ -143,14 +151,9 @@ func (s *Server) adminProviderCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"id": req.ID})
 }
 
-// adminProviderTest handles POST /api/admin/providers/:id/test to test a provider connection.
-func (s *Server) adminProviderTest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		methodNotAllowed(w)
-		return
-	}
-
-	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/admin/providers/"), "/test")
+// providerTest 处理 POST /api/admin/providers/{id}/test:按 kind 做一次真实连通性
+// 检查(由 adminProviderByID 分发,id 已从路径解析)。
+func (s *Server) providerTest(w http.ResponseWriter, r *http.Request, id string) {
 	p, err := s.providerStore.Get(r.Context(), id)
 	if errors.Is(err, providers.ErrProviderNotFound) {
 		writeError(w, http.StatusNotFound, errors.New("provider not found"))
@@ -229,6 +232,13 @@ func (s *Server) aiMatting(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	// 抠图打的是管理员付费的外部 API:按 uid 限流,防止(尤其是匿名游客)刷额度。
+	if !s.mattingLimiter.allow(uid(r)) {
+		w.Header().Set("Retry-After", "3600")
+		writeCodedError(w, http.StatusTooManyRequests, "rate_limited",
+			errors.New("AI 抠图请求太频繁，请稍后再试"))
+		return
+	}
 
 	// Find enabled matting provider.
 	list, err := s.providerStore.List(r.Context(), providers.KindMatting)
@@ -251,11 +261,14 @@ func (s *Server) aiMatting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form.
-	if err := r.ParseMultipartForm(s.opts.MaxStampBytes); err != nil {
-		writeError(w, http.StatusBadRequest, errors.New("failed to parse multipart form"))
+	// 与印章上传同限:用 MaxBytesReader 拒绝超大请求体(之前是无上限 + 静默截断,
+	// 截断的坏图还会被发给计费 API)。
+	r.Body = http.MaxBytesReader(w, r.Body, s.opts.MaxStampBytes)
+	if err := r.ParseMultipartForm(multipartMemory); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("图片过大或表单无效（上限 %d MB）", s.opts.MaxStampBytes>>20))
 		return
 	}
+	defer cleanupMultipart(r)
 
 	file, _, err := r.FormFile("image")
 	if err != nil {
@@ -264,7 +277,7 @@ func (s *Server) aiMatting(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	imageData, err := io.ReadAll(io.LimitReader(file, s.opts.MaxStampBytes))
+	imageData, err := io.ReadAll(file)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, errors.New("failed to read image"))
 		return

@@ -60,13 +60,17 @@ type oauthStateStore struct {
 type oauthPendingState struct {
 	provider string
 	expires  time.Time
+	// claimUID 是发起登录时持有游客会话的游客 uid。回调是来自提供方的跨站导航,
+	// SameSite=Strict 的会话 cookie 不会随之发送,所以游客身份必须经 state 携带,
+	// 才能在回调里完成「游客就地升级」。
+	claimUID string
 }
 
 func newOAuthStateStore() *oauthStateStore {
 	return &oauthStateStore{states: make(map[string]oauthPendingState)}
 }
 
-func (st *oauthStateStore) put(state, provider string, expires time.Time) {
+func (st *oauthStateStore) put(state, provider, claimUID string, expires time.Time) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	now := time.Now()
@@ -75,18 +79,22 @@ func (st *oauthStateStore) put(state, provider string, expires time.Time) {
 			delete(st.states, k)
 		}
 	}
-	st.states[state] = oauthPendingState{provider: provider, expires: expires}
+	st.states[state] = oauthPendingState{provider: provider, expires: expires, claimUID: claimUID}
 }
 
-// consume 单次取出并校验:无论校验结果如何,state 都立即失效。
-func (st *oauthStateStore) consume(state, provider string) bool {
+// consume 单次取出并校验:无论校验结果如何,state 都立即失效。校验通过时返回
+// 发起方携带的游客 uid(可能为空)。
+func (st *oauthStateStore) consume(state, provider string) (string, bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	v, ok := st.states[state]
 	if ok {
 		delete(st.states, state)
 	}
-	return ok && v.provider == provider && time.Now().Before(v.expires)
+	if !ok || v.provider != provider || !time.Now().Before(v.expires) {
+		return "", false
+	}
+	return v.claimUID, true
 }
 
 /* ---------------- handlers ---------------- */
@@ -109,7 +117,12 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, "oauth state", err)
 		return
 	}
-	s.oauthStates.put(state, kind, time.Now().Add(oauthStateTTL))
+	// 发起方是同站导航,能看到会话 cookie:把游客 uid 塞进 state,回调时据此就地升级。
+	claimUID := ""
+	if current, err := s.auth.Authenticate(r.Context(), r); err == nil && current.IsGuest {
+		claimUID = current.ID
+	}
+	s.oauthStates.put(state, kind, claimUID, time.Now().Add(oauthStateTTL))
 	http.Redirect(w, r, client.AuthorizationURL(s.oauthRedirectURI(r, kind), state), http.StatusFound)
 }
 
@@ -128,7 +141,12 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	code := query.Get("code")
 	state := query.Get("state")
-	if code == "" || state == "" || !s.oauthStates.consume(state, kind) {
+	if code == "" || state == "" {
+		s.redirectAuthError(w, r, "登录会话已过期，请重新发起登录")
+		return
+	}
+	claimUID, ok := s.oauthStates.consume(state, kind)
+	if !ok {
 		s.redirectAuthError(w, r, "登录会话已过期，请重新发起登录")
 		return
 	}
@@ -154,12 +172,12 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, "auth settings", err)
 		return
 	}
-	_, raw, expires, err := s.auth.LoginOrRegisterExternalWithPolicy(r.Context(), auth.ExternalIdentity{
+	_, raw, expires, err := s.auth.LoginOrRegisterExternalClaiming(r.Context(), auth.ExternalIdentity{
 		Provider:    kind,
 		Subject:     info.Subject,
 		DisplayName: info.Name,
 		Email:       info.Email,
-	}, settings)
+	}, settings, claimUID)
 	switch {
 	case err == nil:
 		s.auth.SetSessionCookie(w, raw, expires)
