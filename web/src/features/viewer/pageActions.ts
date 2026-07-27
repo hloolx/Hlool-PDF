@@ -1,4 +1,4 @@
-import { ApiError, errorText, postFormBlob } from '../../lib/api'
+import { ApiError, errorText } from '../../lib/api'
 import { downloadBlob } from '../../lib/download'
 import type { PDFDocumentProxy } from '../../lib/pdfjs'
 import { parsePageExpression } from '../../lib/pages'
@@ -6,6 +6,7 @@ import type { FileConfig, PDFFile, PageInfo, Placement, StampAsset } from '../..
 import { activeConfig, useEditorStore, type EditorState } from '../../state/store'
 import { toast } from '../../state/toasts'
 import { composePdf } from '../workspace/actions'
+import { processDetachedPdf } from '../generate/actions'
 import { requireReauth } from '../auth/useAuth'
 import { seamCrop, seamRectPt } from '../seam/slices'
 import { loadImage } from './imageCache'
@@ -208,19 +209,14 @@ async function rasterPdfFromCanvas(canvas: HTMLCanvasElement, pageInfo: PageInfo
   return makeJpegPdf(jpeg, canvas.width, canvas.height, pageInfo.widthPt, pageInfo.heightPt)
 }
 
+/** 单页盖章/加密：本地优先（processDetachedPdf 内部含云端回退），页码已重映射到 1。 */
 async function processOnePagePdf(blob: Blob, name: string, placements: Placement[], outputPassword: string) {
-  const form = new FormData()
-  form.append('file', blob, name)
-  form.append(
-    'params',
-    JSON.stringify({
-      placements: placements.map((placement) => placementPayload(placement, 1)),
-      seamSeals: [],
-      outputPassword,
-      outputName: name
-    })
+  return processDetachedPdf(
+    blob,
+    placements.map((placement) => placementPayload(placement, 1)),
+    outputPassword,
+    name
   )
-  return postFormBlob('/api/process', form)
 }
 
 export async function copyPageAsPng(doc: PDFDocumentProxy | null, file: PDFFile, pageInfo: PageInfo) {

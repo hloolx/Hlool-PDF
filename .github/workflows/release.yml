@@ -11,9 +11,58 @@ permissions:
   packages: write
 
 jobs:
+  # 双引擎对齐验收（LOCAL_FIRST.md：防止服务端与浏览器本地引擎静默漂移）。
+  # go test + 数学单测 + 28 个红线用例的 150dpi 逐像素比对，全绿才允许发布。
+  verify:
+    name: Engine alignment harness
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Go tests
+        run: go test ./...
+
+      - name: Install web dependencies
+        run: npm --prefix web ci
+
+      - name: Install harness dependencies
+        working-directory: scripts/verify-local-engine
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Run alignment harness
+        run: node scripts/verify-local-engine/verify.mjs
+
+      - name: Upload harness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-alignment-report
+          path: |
+            scripts/verify-local-engine/.work/report.json
+            scripts/verify-local-engine/.work/diff/
+          if-no-files-found: ignore
+
   release:
     name: Build packages and image
     runs-on: ubuntu-latest
+    needs: verify
 
     steps:
       - name: Checkout

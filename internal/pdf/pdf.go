@@ -109,6 +109,10 @@ type wmItem struct {
 	opacity float64
 }
 
+// StampPDF 是服务端盖章引擎。浏览器端有一份语义对齐的本地实现
+// web/src/features/generate/localEngine.ts（本地优先出件的主路径，本函数是
+// 其回退兜底）——改动任何盖章语义都必须同步两边，并跑
+// scripts/verify-local-engine.ps1 的像素级对齐验收。
 func StampPDF(inputPath, outputPath string, pages []storage.PageInfo, options StampOptions, stamps map[string]StampAsset) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return err
@@ -647,7 +651,8 @@ func normalizedOpacity(opacity float64) float64 {
 // watermarkDesc 生成 pdfcpu 的水印描述串。rotation 参数使用前端约定(CSS/画布,
 // 正角 = 屏幕顺时针);pdfcpu 的 rot 是数学约定(正角 = 纸面逆时针,见其
 // CalcTransformMatrix 的标准 sin/cos 矩阵),因此这里取负,保证「预览即产物」的
-// 旋转方向一致。
+// 旋转方向一致。本地引擎的对应取负点在
+// web/src/features/generate/localEngineMath.ts placementDraw(每个引擎唯一一处)。
 func watermarkDesc(x, y, scale, rotation, opacity float64) string {
 	rot := -rotation
 	if rot == 0 {

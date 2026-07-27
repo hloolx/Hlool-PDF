@@ -1,9 +1,11 @@
 import { useRef } from 'react'
 import {
   ChevronDown,
+  Cloud,
   FileText,
   FileUp,
   Keyboard,
+  Laptop,
   Layers,
   Loader2,
   LogOut,
@@ -16,6 +18,8 @@ import {
   Redo2,
   ShieldCheck,
   Sun,
+  ToggleLeft,
+  ToggleRight,
   Trash2,
   Undo2,
   UserPlus,
@@ -40,7 +44,7 @@ import {
 import { Button, ConfirmButton, IconButton } from '../ui/Button'
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from '../ui/Menu'
 import { Tip } from '../ui/Tooltip'
-import { generateAll, generateCurrent, generationStatus, outputNameFor } from '../features/generate/actions'
+import { decideRoute, generateAll, generateCurrent, generationStatus, outputNameFor, type ProcessRoute } from '../features/generate/actions'
 import { toggleTheme } from '../features/theme/ThemeFx'
 import { applyConfigToAllFiles, deleteFileAction, importPicked } from '../features/workspace/actions'
 import { logout } from '../features/auth/api'
@@ -381,6 +385,24 @@ function MobileMoreMenu() {
   )
 }
 
+/** 出件路径徽标：与执行共用 decideRoute，保证「显示的路径」即「实际走的路径」。 */
+function RouteBadge({ route }: { route: ProcessRoute }) {
+  const local = route.kind === 'local'
+  return (
+    <Tip label={local ? '本地处理：文件不上传服务器，处理速度只取决于这台电脑' : `云端处理：${route.reason ?? ''}`}>
+      <span
+        className={cx(
+          'mr-1.5 hidden h-10 shrink-0 items-center gap-1 rounded-lg px-2 text-xs sm:flex',
+          local ? 'text-ink-muted' : 'bg-sunken text-ink-muted'
+        )}
+      >
+        {local ? <Laptop size={14} /> : <Cloud size={14} />}
+        {local ? '本地' : '云端'}
+      </span>
+    </Tip>
+  )
+}
+
 function GenerateSplitButton() {
   const status = useEditorStore(useShallow((state) => generationStatus(state)))
   const summary = useEditorStore(
@@ -397,10 +419,24 @@ function GenerateSplitButton() {
       }
     })
   )
+  const route = useEditorStore(
+    useShallow((state): ProcessRoute | null => {
+      const file = activeFile(state)
+      return file ? decideRoute(state, file) : null
+    })
+  )
+  const preferLocal = useEditorStore((state) => state.preferLocalProcessing)
+  const setPreferLocal = useEditorStore((state) => state.setPreferLocalProcessing)
+  const localMaxMB = useEditorStore((state) => state.localMaxMB)
+  const setLocalMaxMB = useEditorStore((state) => state.setLocalMaxMB)
   const generating = useEditorStore((state) => state.busy.startsWith('正在生成'))
+  // 三档循环：500MB（默认）→ 2GB → 不限。0 表示不限制。
+  const nextLocalMax = localMaxMB === 500 ? 2048 : localMaxMB === 2048 ? 0 : 500
+  const localMaxLabel = localMaxMB <= 0 ? '不限' : localMaxMB >= 1024 ? `${localMaxMB / 1024}GB` : `${localMaxMB}MB`
 
   return (
     <div className="flex">
+      {route && <RouteBadge route={route} />}
       <Tip label={status.hint}>
         <Button
           variant="primary"
@@ -434,6 +470,14 @@ function GenerateSplitButton() {
               <span className="shrink-0">输出加密</span>
               <span className="min-w-0 truncate text-right text-ink">{summary.encrypted ? 'AES-256' : '关'}</span>
             </p>
+            {route && (
+              <p className="flex min-w-0 items-center justify-between gap-2">
+                <span className="shrink-0">处理方式</span>
+                <span className="min-w-0 truncate text-right text-ink">
+                  {route.kind === 'local' ? '本地（文件不上传）' : `云端（${route.reason}）`}
+                </span>
+              </p>
+            )}
             {summary.outputName && (
               <p className="flex min-w-0 items-center gap-2">
                 <span className="shrink-0">输出名</span>
@@ -450,6 +494,30 @@ function GenerateSplitButton() {
           <MenuItem disabled={summary.configuredCount === 0} onSelect={() => void generateAll()}>
             生成全部（{summary.configuredCount} 个已配置）
           </MenuItem>
+          <MenuSeparator />
+          <MenuItem
+            onSelect={(event) => {
+              // 保持菜单打开，让开关的即时反馈可见（徽标与「处理方式」行同步变化）。
+              event.preventDefault()
+              setPreferLocal(!preferLocal)
+            }}
+          >
+            {preferLocal ? <ToggleRight size={16} className="text-accent" /> : <ToggleLeft size={16} />}
+            优先本地处理：{preferLocal ? '开' : '关'}
+            <span className="ml-auto text-xs text-ink-muted">失败自动转云端</span>
+          </MenuItem>
+          {preferLocal && (
+            <MenuItem
+              onSelect={(event) => {
+                event.preventDefault()
+                setLocalMaxMB(nextLocalMax)
+              }}
+            >
+              <span className="w-4" aria-hidden />
+              本地处理上限：{localMaxLabel}
+              <span className="ml-auto text-xs text-ink-muted">超过则转云端 · 点击切换</span>
+            </MenuItem>
+          )}
         </MenuContent>
       </Menu>
     </div>

@@ -2,7 +2,7 @@ import { ApiError, deleteJSON, errorText, postFormBlob, upload } from '../../lib
 import { fileFingerprint } from '../../lib/fingerprint'
 import { ensurePdfName, isPasswordException, makePdfFile, readPdfPages } from '../../lib/pdfDoc'
 import { clamp, type PDFFile, type StampAsset } from '../../lib/types'
-import { activeFile, hasConfig, switchFile, useEditorStore } from '../../state/store'
+import { activeFile, hasConfig, switchFile, useEditorStore, withinLocalLimit } from '../../state/store'
 import { toast } from '../../state/toasts'
 import { prepareStamp } from '../stamps/importPipeline'
 import { generateStampId } from '../stamps/persistence'
@@ -42,7 +42,9 @@ export type ComposePageRef = { file: number; pageNumber: number; rotate?: number
 
 /**
  * 合并/重排/旋转：把多个源 PDF 的页按给定顺序拼成一个新 PDF（每页可带 90° 旋转，
- * 服务端把旋转烘进页面几何），返回字节。password 用于解密受保护的源（产物为明文）。
+ * 旋转烘进页面几何），返回字节。password 用于解密受保护的源（产物为明文）。
+ * 本地优先：localCompose 引擎在浏览器完成（文件不上传），任何异常静默回退云端
+ * /api/compose（行为与本地化前一致）。
  */
 export async function composePdf(
   blobs: Blob[],
@@ -50,6 +52,17 @@ export async function composePdf(
   name: string,
   password?: string
 ): Promise<Blob> {
+  const state = useEditorStore.getState()
+  const totalBytes = blobs.reduce((sum, blob) => sum + blob.size, 0)
+  if (state.preferLocalProcessing && withinLocalLimit(state, totalBytes)) {
+    try {
+      const { composePdfLocally } = await import('../generate/localCompose')
+      const bytes = await composePdfLocally(blobs, pages, password)
+      return new Blob([bytes as BlobPart], { type: 'application/pdf' })
+    } catch (err) {
+      console.warn('[local-compose] 回退云端：', err)
+    }
+  }
   const form = new FormData()
   blobs.forEach((blob, i) => form.append('file', blob, `src_${i}.pdf`))
   form.append('params', JSON.stringify({ name, pages }))
@@ -57,7 +70,18 @@ export async function composePdf(
   return postFormBlob('/api/compose', form)
 }
 
+/** 图片 → 单页 PDF（A4 等比居中）。本地优先，异常静默回退云端 /api/image-to-pdf。 */
 async function imageToPdf(blob: Blob, name: string): Promise<Blob> {
+  const state = useEditorStore.getState()
+  if (state.preferLocalProcessing && withinLocalLimit(state, blob.size)) {
+    try {
+      const { imageToPdfLocally } = await import('../generate/localCompose')
+      const bytes = await imageToPdfLocally(blob)
+      return new Blob([bytes as BlobPart], { type: 'application/pdf' })
+    } catch (err) {
+      console.warn('[local-image-to-pdf] 回退云端：', err)
+    }
+  }
   const form = new FormData()
   form.append('file', blob, name)
   return postFormBlob('/api/image-to-pdf', form)

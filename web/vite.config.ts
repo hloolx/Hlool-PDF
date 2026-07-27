@@ -4,6 +4,9 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // 本地盖章 Worker（stampWorker.ts）内部有动态 import（pdf-lib/qpdf 懒加载），
+  // 代码分割要求 ES 模块格式的 worker（目标浏览器均支持 module worker）。
+  worker: { format: 'es' },
   server: {
     port: 5173,
     proxy: {

@@ -88,7 +88,7 @@ export function AuthScreen() {
             <span className="pointer-events-none absolute inset-[4px] rounded-xl border border-white/40" aria-hidden />
           </span>
           <h1 className="text-lg font-semibold tracking-wide">hlool pdf</h1>
-          <p className="text-[13px] text-ink-muted">在线 PDF 盖章 · 阅后即焚</p>
+          <p className="text-[13px] text-ink-muted">在线 PDF 盖章 · 文件不出本机</p>
         </div>
 
         <div className="rounded-2xl border border-line bg-panel p-5 shadow-pop">

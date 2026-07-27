@@ -17,8 +17,12 @@ import (
 // directives (default-src/connect-src 'self', frame-ancestors 'none') are kept.
 // The script-src hash admits the inline theme-restore script in web/index.html
 // (dark-mode FOUC guard); recompute and update it whenever that script changes.
+//
+// 'wasm-unsafe-eval' 允许 WebAssembly 编译（本地 qpdf-wasm 加密/解锁引擎必需），
+// 是仅放开 WASM 的窄指令，不等于 'unsafe-eval'（后者会放开任意 JS eval）。
+// 缺它时 qpdf 实例化会被 CSP 拦截，本地加密静默回退云端（文件被上传）。
 const contentSecurityPolicy = "default-src 'self'; " +
-	"script-src 'self' 'sha256-k49LJ3d8RR5aYeusxZ81DjpYrYD2SrMMqLzPxmsCUj4='; " +
+	"script-src 'self' 'wasm-unsafe-eval' 'sha256-k49LJ3d8RR5aYeusxZ81DjpYrYD2SrMMqLzPxmsCUj4='; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' blob: data:; " +
 	"font-src 'self' data:; " +

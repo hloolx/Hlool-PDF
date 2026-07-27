@@ -1,5 +1,9 @@
 # hlool-pdf Roadmap 实施状态(唯一事实源)
 
+> **v0.1.0（2026-07-26）：本地优先处理（Local-First）全量落地** —— 盖章/页面操作/
+> 图片转 PDF/加密解锁默认在浏览器完成，文件不上传；双引擎像素级对齐 harness 已挂进
+> release 工作流。方案与实施记录见 `LOCAL_FIRST.md`（第 9/10 节）。
+
 **更新时间**:2026-07-02 傍晚(七个阶段全部完成)
 **验证方式**:`go build ./...` ✅ · `go vet ./...` ✅ · `go test -count=1 ./...` 全绿 ✅ · `npm --prefix web run build` ✅ · 真实服务进程端点冒烟 ✅ · **真实浏览器(Edge/Playwright)五档视口截图实测 + 安装向导端到端** ✅
 
