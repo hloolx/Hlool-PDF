@@ -1,6 +1,7 @@
 .hlool-data/
 .hlool-data*/
 .tmp*
+.wrangler/
 dist/
 web/dist/
 internal/webui/dist/
