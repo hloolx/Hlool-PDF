@@ -73,6 +73,16 @@ self.addEventListener('fetch', (event) => {
     // Build files are immutable and explicitly allowlisted. Ignore Vary: Origin:
     // precache and browser module requests may carry different Origin headers.
     const cached = await cache.match(navigation ? INDEX : request, { ignoreVary: true })
+    // Static hosts may redirect index.html to the directory URL. Navigation
+    // requests reject redirected responses supplied by a service worker. Keep
+    // the cached build and its security headers, but remove that redirect flag.
+    if (navigation && cached?.redirected) {
+      return new Response(cached.body, {
+        status: cached.status,
+        statusText: cached.statusText,
+        headers: cached.headers
+      })
+    }
     return cached || fetch(request)
   })())
 })

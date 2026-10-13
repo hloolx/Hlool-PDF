@@ -50,7 +50,8 @@ test('deployment metadata is versioned but never requested by the offline instal
   expect(updated.version).not.toBe(initial.version)
 })
 
-test('Pages-style metadata 404 responses preserve production offline installation', async ({ page, context }) => {
+for (const redirectIndex of [false, true]) {
+test(`Pages-style metadata 404 responses preserve offline installation${redirectIndex ? ' with index.html redirected to /' : ''}`, async ({ page, context }) => {
   const headersFile = await readFile(join(dist, '_headers'), 'utf8')
   const common = headersFile.match(/^\/\*\r?\n((?:[ \t]+[^\r\n]+\r?\n)+)/m)![1]
   const securityHeaders = Object.fromEntries(common.trim().split(/\r?\n/).map((line) => {
@@ -68,6 +69,7 @@ test('Pages-style metadata 404 responses preserve production offline installatio
   }
   expect(securityHeaders['Content-Security-Policy']).toContain("'wasm-unsafe-eval'")
   const missingRequests: string[] = []
+  const redirectedRequests: string[] = []
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   const server = createServer(async (request, response) => {
@@ -76,6 +78,11 @@ test('Pages-style metadata 404 responses preserve production offline installatio
       if (metadata.includes(pathname.split('/')[1])) {
         missingRequests.push(pathname)
         response.writeHead(404).end()
+        return
+      }
+      if (redirectIndex && pathname === '/index.html') {
+        redirectedRequests.push(pathname)
+        response.writeHead(308, { Location: '/', 'Cache-Control': 'no-store' }).end()
         return
       }
       const file = resolve(dist, pathname === '/' ? 'index.html' : `.${pathname}`)
@@ -97,12 +104,20 @@ test('Pages-style metadata 404 responses preserve production offline installatio
     expect(missingRequests).toEqual([])
     const cached = await page.evaluate(async () => {
       const name = (await caches.keys()).find((key) => key.startsWith('hlool-pdf-app:'))!
-      return (await (await caches.open(name)).keys()).map((request) => new URL(request.url).pathname)
+      const cache = await caches.open(name)
+      return {
+        paths: (await cache.keys()).map((request) => new URL(request.url).pathname),
+        redirected: (await cache.match(new URL('index.html', location.href)))!.redirected
+      }
     })
-    expect(cached.some((path) => path.endsWith('.wasm'))).toBe(true)
-    expect(cached.filter((path) => metadata.includes(path.split('/')[1]))).toEqual([])
+    expect(cached.paths.some((path) => path.endsWith('.wasm'))).toBe(true)
+    expect(cached.paths.filter((path) => metadata.includes(path.split('/')[1]))).toEqual([])
+    expect(cached.redirected).toBe(redirectIndex)
+    expect(redirectedRequests.length > 0).toBe(redirectIndex)
     await context.setOffline(true)
-    await page.reload()
+    const reloaded = await page.reload()
+    expect(reloaded!.status()).toBe(200)
+    expect(reloaded!.headers()['content-security-policy']).toBe(securityHeaders['Content-Security-Policy'])
     await page.getByRole('button', { name: '本地资料', exact: true }).click()
     await expect(page.getByTestId('offline-status')).toHaveText('离线已就绪')
     expect(errors).toEqual([])
@@ -111,3 +126,4 @@ test('Pages-style metadata 404 responses preserve production offline installatio
     await new Promise<void>((done, reject) => server.close((error) => error ? reject(error) : done()))
   }
 })
+}

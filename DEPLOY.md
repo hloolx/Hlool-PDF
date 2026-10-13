@@ -57,6 +57,8 @@ npm exec --yes --package wrangler@4 -- wrangler pages deploy web/dist --project-
 
 `web/public/_headers` 会随构建进入输出目录，由 Pages 应用 CSP、`nosniff`、无来源信息及缓存规则。CSP 与 Vite 生产预览、Nginx 静态配置一致，允许本机 Worker/WASM、Blob 图片与下载。`assets/` 哈希资源缓存一年；入口 HTML、`sw.js`、主题脚本、manifest、图标和未哈希的 PDF.js 资源要求重新验证缓存。不要另加覆盖这些规则的全站长期缓存策略。
 
+自定义域名经过 Cloudflare 代理时，区域的默认 Browser Cache TTL 可能覆盖这些短缓存头。`pdf.wein.dev` 已配置仅匹配此主机名的 Cache Rule，Browser TTL 使用 **Respect origin**（`browser_ttl.mode = respect_origin`），保留 Pages 的响应头。迁移到其他区域或域名时也应检查实际 `sw.js` 响应，不能只检查 `*.pages.dev`。Pages 会把 `/index.html` 重定向到 `/`；离线 Worker 会保留正文和响应头，重建导航使用的缓存响应，以支持断网刷新。
+
 Pages 将 `_headers`、`_redirects` 等文件当作部署配置处理，不会将它们作为普通资源提供。因此离线构建清单排除这些元文件，同时仍将其内容计入版本，保证响应头变更也触发应用缓存更新。配置格式参考 [Pages 响应头说明](https://developers.cloudflare.com/pages/configuration/headers/)。上线后应检查实际响应头，并在「本地资料」显示「离线已就绪」后断网刷新、首次生成 PDF 验收。
 
 ### 域名 `pdf.wein.dev` 与资料迁移
