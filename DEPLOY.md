@@ -30,6 +30,41 @@ npm --prefix web run build -- --base=/pdf/
 
 应用会完整预缓存构建文件后才报告离线就绪。更新等待旧应用窗口关闭；不会自动刷新进行中的工作。
 
+## Cloudflare Pages
+
+当前使用 Direct Upload 项目 `hlool-pdf`，本次未配置 Git 集成或自动发布。在仓库根目录执行：
+
+```sh
+npm --prefix web ci
+npm --prefix web run build
+# 首次使用或登录过期时先执行：npm exec --yes --package wrangler@4 -- wrangler login
+npm exec --yes --package wrangler@4 -- wrangler pages deploy web/dist --project-name hlool-pdf --branch main
+```
+
+上传的是完整 `web/dist/`，不是源代码目录。每次更新需重新构建并执行上传命令。
+
+若以后另建使用 Git 集成的 Pages 项目，构建配置如下（当前 Direct Upload 项目不依赖这些在线构建设置）：
+
+| 配置 | 值 |
+| --- | --- |
+| 根目录（Root directory） | `web` |
+| 构建命令（Build command） | `npm run build` |
+| 构建输出目录（Build output directory） | `dist` |
+| 环境变量 | `NODE_VERSION=24` |
+| 生产分支（使用 Git 集成时） | `main` |
+
+配置参考 [Pages 官方说明](https://developers.cloudflare.com/pages/configuration/build-configuration/)。上述可选配置不表示已经启用 Git 自动部署。
+
+`web/public/_headers` 会随构建进入输出目录，由 Pages 应用 CSP、`nosniff`、无来源信息及缓存规则。CSP 与 Vite 生产预览、Nginx 静态配置一致，允许本机 Worker/WASM、Blob 图片与下载。`assets/` 哈希资源缓存一年；入口 HTML、`sw.js`、主题脚本、manifest、图标和未哈希的 PDF.js 资源要求重新验证缓存。不要另加覆盖这些规则的全站长期缓存策略。
+
+Pages 将 `_headers`、`_redirects` 等文件当作部署配置处理，不会将它们作为普通资源提供。因此离线构建清单排除这些元文件，同时仍将其内容计入版本，保证响应头变更也触发应用缓存更新。配置格式参考 [Pages 响应头说明](https://developers.cloudflare.com/pages/configuration/headers/)。上线后应检查实际响应头，并在「本地资料」显示「离线已就绪」后断网刷新、首次生成 PDF 验收。
+
+### 域名 `pdf.wein.dev` 与资料迁移
+
+先在目标 Pages 项目的 Custom domains 添加 `pdf.wein.dev`，再按该项目给出的目标配置或切换 DNS，等待域名与 HTTPS 证书激活。新部署和自定义域名验收完成前保留旧站点，方便用户导出资料及回退；不要在关联 Pages 项目之前仅靠 CNAME 猜测目标。
+
+浏览器资料按来源（协议、主机、端口）隔离。从 `*.pages.dev`、本机地址或其他域名迁移到 `https://pdf.wein.dev` 时，先在原地址通过「本地资料 → 导出备份」下载 ZIP，再在新地址导入。PDF 文件与尚未下载的页面编辑不包含在资料备份里，迁移前应先生成下载。若地址仍是相同的 `https://pdf.wein.dev`，仅 DNS 或托管平台变更不会自动迁移或清除该来源的浏览器资料；旧服务端账号中的印章仍需按下文单独迁出。不要为了更新站点而清理浏览器数据。
+
 ## 可选 Docker
 
 ```sh

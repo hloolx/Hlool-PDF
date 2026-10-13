@@ -4,6 +4,8 @@
 
 ## 开始使用
 
+在线使用：[pdf.wein.dev](https://pdf.wein.dev)。网站由 Cloudflare Pages 分发，PDF 处理与资料存储仍在你的浏览器内。自行部署见 [DEPLOY.md](DEPLOY.md)。
+
 需要 Node.js 22.13+ 与 npm 10+，在仓库根目录执行：
 
 ```powershell

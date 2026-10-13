@@ -19,12 +19,17 @@ export function offlinePlugin(): Plugin {
           return entry.isDirectory() ? filesAt(path) : [path]
         })
       }
-      const files = filesAt(output).filter((path) => !path.endsWith('.map') && !path.endsWith('sw.js')).sort()
+      // Pages consumes these deployment files instead of serving them as assets.
+      // _worker.js can also be a directory in an advanced-mode Pages deployment.
+      const deploymentFiles = new Set(['_headers', '_redirects', '_routes.json', '_worker.js', '.assetsignore'])
+      const files = filesAt(output).filter((path) => !path.endsWith('.map') && relative(output, path) !== 'sw.js').sort()
       const hash = createHash('sha256')
-      const paths = files.map((path) => {
+      const paths = files.flatMap((path) => {
         const name = relative(output, path).replaceAll('\\', '/')
+        // Header changes must create a new cache version, so cached HTML also
+        // receives the updated policy. Deployment metadata is never fetched.
         hash.update(name).update(readFileSync(path))
-        return name
+        return deploymentFiles.has(name.split('/')[0]) ? [] : [name]
       })
       const template = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'service-worker.js'), 'utf8')
       hash.update(template)
