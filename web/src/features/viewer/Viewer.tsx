@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import {
   AlignCenter,
@@ -11,11 +11,13 @@ import {
   RotateCw,
   Trash2,
   Undo2,
+  SlidersHorizontal,
+  X,
   ZoomIn,
   ZoomOut
 } from 'lucide-react'
 import type { PDFDocumentProxy } from '../../lib/pdfjs'
-import { clamp, type PageInfo } from '../../lib/types'
+import { clamp, type PageInfo, type PDFFile } from '../../lib/types'
 import { isEditingField } from '../../lib/dom'
 import { parsePageExpression } from '../../lib/pages'
 import { activeConfig, activeFile, MAX_ZOOM, MIN_ZOOM, redo, undo, useEditorStore, useTemporal } from '../../state/store'
@@ -30,6 +32,8 @@ import { applyPlacementToPages, centerPlacement, duplicatePlacement } from '../p
 import { PageOverlay } from '../placements/PageOverlay'
 import { rotatePage } from '../thumbnails/reorder'
 import { PageCanvas } from './PageCanvas'
+import { Button } from '../../ui/Button'
+import { ScanPageCanvas } from '../scan/ScanPageCanvas'
 import { clearPageRegistry, getPageEl, registerPage } from './pageRegistry'
 import { copyPageAsPng, exportPagePdf } from './pageActions'
 
@@ -48,6 +52,7 @@ export function Viewer({ doc, error }: { doc: PDFDocumentProxy | null; error: st
   const seamPagesExpr = useEditorStore((state) => activeConfig(state).seam.pages)
   const placementCount = useEditorStore((state) => activeConfig(state).placements.length)
   const hasStamps = useEditorStore((state) => state.stamps.length > 0)
+  const scanPreview = useEditorStore((state) => state.selection?.kind === 'scan')
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const [menuContext, setMenuContext] = useState<ViewerMenuContext>({ kind: 'canvas' })
 
@@ -105,7 +110,7 @@ export function Viewer({ doc, error }: { doc: PDFDocumentProxy | null; error: st
     }
     scroller.addEventListener('wheel', onWheel, { passive: false })
     return () => scroller.removeEventListener('wheel', onWheel)
-  }, [])
+  }, [file?.fileId])
 
   /* 滚动跟踪当前页 */
   useEffect(() => {
@@ -150,6 +155,10 @@ export function Viewer({ doc, error }: { doc: PDFDocumentProxy | null; error: st
     }
 
     const state = useEditorStore.getState()
+    if (state.selection?.kind === 'scan') {
+      flushSync(() => setMenuContext({ kind: 'canvas' }))
+      return
+    }
     const placementEl = target.closest<HTMLElement>('[data-placement-id]')
     const pageEl = target.closest<HTMLElement>('[data-page]')
     const pageNumber = Number(pageEl?.dataset.page)
@@ -207,18 +216,35 @@ export function Viewer({ doc, error }: { doc: PDFDocumentProxy | null; error: st
   }
 
   return (
+    <section aria-label="文档工作区" className="flex min-w-0 flex-1 flex-col">
+      {scanPreview && (
+        <div data-testid="scan-preview-toolbar" className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-line bg-panel px-3 py-2">
+          <div className="min-w-0">
+            <p className="text-[13px] font-medium">扫描预览</p>
+            <p className="text-xs text-ink-muted">已合成印章 · 滚动翻页，缩放查看</p>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button size="sm" onClick={() => useEditorStore.getState().toggleRightPanel(true)}>
+              <SlidersHorizontal size={15} />调整参数
+            </Button>
+            <Button size="sm" onClick={() => useEditorStore.getState().select(null)}>
+              <X size={15} />退出预览
+            </Button>
+          </div>
+        </div>
+      )}
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
           ref={scrollerRef}
-          className="scroll-slim relative min-w-0 flex-1 overflow-auto bg-canvas"
+          className="scroll-slim relative min-h-0 min-w-0 flex-1 overflow-auto bg-canvas"
           onContextMenuCapture={handleContextMenuCapture}
         >
           {error ? (
             <div className="p-8 text-center text-sm text-accent">{error}</div>
           ) : (
             <div className="mx-auto flex w-max min-w-full flex-col items-center gap-7 px-14 py-10">
-              {placementCount === 0 && !seamEnabled && hasStamps && (
+              {!scanPreview && placementCount === 0 && !seamEnabled && hasStamps && (
                 <p className="anim-fade -mb-2 text-xs text-ink-muted">
                   从左下角印章架把章拖到页面上，或单击印章后在页面上连续盖章
                 </p>
@@ -227,6 +253,8 @@ export function Viewer({ doc, error }: { doc: PDFDocumentProxy | null; error: st
                 <PageFrame
                   key={`${file.fileId}:${pageInfo.pageNumber}`}
                   pageInfo={pageInfo}
+                  file={file}
+                  scanPreview={scanPreview}
                   doc={doc}
                   zoom={zoom}
                   scrollerRef={scrollerRef}
@@ -240,6 +268,7 @@ export function Viewer({ doc, error }: { doc: PDFDocumentProxy | null; error: st
       </ContextMenuTrigger>
       <ViewerContextMenuContent context={menuContext} doc={doc} file={file} />
     </ContextMenu>
+    </section>
   )
 }
 
@@ -354,6 +383,8 @@ function ViewerContextMenuContent({
 
 const PageFrame = memo(function PageFrame({
   pageInfo,
+  file,
+  scanPreview,
   doc,
   zoom,
   scrollerRef,
@@ -361,6 +392,8 @@ const PageFrame = memo(function PageFrame({
   seamTotal
 }: {
   pageInfo: PageInfo
+  file: PDFFile
+  scanPreview: boolean
   doc: PDFDocumentProxy | null
   zoom: number
   scrollerRef: RefObject<HTMLDivElement | null>
@@ -369,6 +402,11 @@ const PageFrame = memo(function PageFrame({
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
   const [inView, setInView] = useState(pageInfo.pageNumber <= 2)
+  const [scanSize, setScanSize] = useState<{ doc: PDFDocumentProxy | null; width: number; height: number } | null>(null)
+  const onScanPageSize = useCallback((width: number, height: number) => {
+    setScanSize((current) => current?.doc === doc && current.width === width && current.height === height
+      ? current : { doc, width, height })
+  }, [doc])
 
   useEffect(() => {
     registerPage(pageInfo.pageNumber, ref.current)
@@ -388,8 +426,9 @@ const PageFrame = memo(function PageFrame({
     return () => observer.disconnect()
   }, [scrollerRef])
 
-  const width = pageInfo.widthPt * zoom
-  const height = pageInfo.heightPt * zoom
+  const scanned = scanPreview && scanSize?.doc === doc ? scanSize : null
+  const width = (scanned?.width ?? pageInfo.widthPt) * zoom
+  const height = (scanned?.height ?? pageInfo.heightPt) * zoom
 
   return (
     <div>
@@ -399,8 +438,10 @@ const PageFrame = memo(function PageFrame({
         className="relative rounded-[3px] bg-white shadow-page"
         style={{ width, height }}
       >
-        {doc && <PageCanvas doc={doc} pageNumber={pageInfo.pageNumber} zoom={zoom} visible={inView} />}
-        <PageOverlay pageInfo={pageInfo} zoom={zoom} seamIndex={seamIndex} seamTotal={seamTotal} />
+        {doc && (scanPreview
+          ? <ScanPageCanvas doc={doc} file={file} pageInfo={pageInfo} visible={inView} onPageSize={onScanPageSize} />
+          : <PageCanvas doc={doc} pageNumber={pageInfo.pageNumber} zoom={zoom} visible={inView} />)}
+        {!scanPreview && <PageOverlay pageInfo={pageInfo} zoom={zoom} seamIndex={seamIndex} seamTotal={seamTotal} />}
       </div>
       <div className="tnum mt-1.5 text-center text-xs text-ink-muted/80">{pageInfo.pageNumber}</div>
     </div>

@@ -2,10 +2,7 @@ import { PDFDocument } from 'pdf-lib'
 import { loadPdf } from '../../lib/pdfjs'
 import type { ScanConfig } from '../../lib/types'
 import { applyScanEffect, canvasToBlob } from './canvas'
-
-/** 单页渲染上限:长边 4000px、总量 1600 万像素,超出等比降 scale,防止大页面撑爆画布(iOS 上限约 16M 像素)。 */
-const MAX_EDGE_PX = 4000
-const MAX_AREA_PX = 16_000_000
+import { clampScanScale } from './renderScale'
 
 export interface ScanProcessOptions {
   /** 源 PDF 的打开密码(加密 PDF 渲染需要)。 */
@@ -33,7 +30,7 @@ export async function processPDFWithScan(source: Blob, config: ScanConfig, optio
 
       const page = await doc.getPage(pageNum)
       const base = page.getViewport({ scale: 1 })
-      const viewport = page.getViewport({ scale: clampScale(config.scale, base.width, base.height) })
+      const viewport = page.getViewport({ scale: clampScanScale(config.scale, base.width, base.height) })
       const canvas = document.createElement('canvas')
       let processed: HTMLCanvasElement | undefined
       try {
@@ -62,15 +59,6 @@ export async function processPDFWithScan(source: Blob, config: ScanConfig, optio
   } finally {
     await loading.destroy()
   }
-}
-
-function clampScale(scale: number, widthPt: number, heightPt: number): number {
-  if (![scale, widthPt, heightPt].every(Number.isFinite) || widthPt <= 0 || heightPt <= 0) throw new Error('扫描页面尺寸或清晰度无效，请检查 PDF 与扫描设置。')
-  let s = Math.min(Math.max(scale, 0.5), 3)
-  const longEdge = Math.max(widthPt, heightPt)
-  if (longEdge * s > MAX_EDGE_PX) s = MAX_EDGE_PX / longEdge
-  if (widthPt * heightPt * s * s > MAX_AREA_PX) s = Math.sqrt(MAX_AREA_PX / (widthPt * heightPt))
-  return s
 }
 
 function throwIfAborted(signal?: AbortSignal) {

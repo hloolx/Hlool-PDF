@@ -1,8 +1,10 @@
 import { useRef } from 'react'
 import {
   ChevronDown,
+  ExternalLink,
   FileText,
   FileUp,
+  Github,
   Keyboard,
   Laptop,
   Layers,
@@ -43,6 +45,8 @@ import { applyConfigToAllFiles, deleteFileAction, importPicked } from '../featur
 import { LocalDataMenu } from '../features/local/LocalDataMenu'
 import { useShortcutHelp } from '../features/help/ShortcutHelp'
 
+const REPOSITORY_URL = 'https://github.com/hloolx/Hlool-PDF'
+
 function TopBarDivider() {
   return <span className="mx-1.5 h-5 w-px shrink-0 bg-line" aria-hidden />
 }
@@ -60,6 +64,7 @@ export function TopBar() {
         <ZoomMenu />
         <TopBarDivider />
         <HelpButton />
+        <RepositoryLink />
         <ThemeToggle />
         <RightPanelToggle />
         <TopBarDivider />
@@ -123,6 +128,23 @@ function HelpButton() {
       <IconButton aria-label="键盘快捷键" onClick={toggle}>
         <Keyboard size={20} />
       </IconButton>
+    </Tip>
+  )
+}
+
+function RepositoryLink() {
+  return (
+    <Tip label="GitHub 项目仓库（新标签页）">
+      <a
+        href={REPOSITORY_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="GitHub 项目仓库（新标签页）"
+        className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2 text-[13px] font-medium text-ink-muted transition-colors hover:bg-sunken hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/60"
+      >
+        <Github size={20} aria-hidden />
+        <span className="hidden xl:inline">GitHub</span>
+      </a>
     </Tip>
   )
 }
@@ -316,6 +338,15 @@ function MobileMoreMenu() {
         <MenuItem onSelect={toggleTheme}>
           {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
           {theme === 'light' ? '暗色' : '亮色'}主题
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem asChild>
+          <a href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer">
+            <Github size={16} aria-hidden />
+            GitHub 项目仓库
+            <ExternalLink size={14} className="ml-auto text-ink-muted" aria-hidden />
+            <span className="sr-only">（新标签页）</span>
+          </a>
         </MenuItem>
       </MenuContent>
     </Menu>

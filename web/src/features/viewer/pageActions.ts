@@ -8,12 +8,46 @@ import { toast } from '../../state/toasts'
 import { beginOperation } from '../../state/operations'
 import { composePdf } from '../workspace/actions'
 import { processDetachedPdf } from '../generate/actions'
-import { localProcessingError } from '../generate/localSafety'
+import { isEncryptedPdfError, localProcessingError } from '../generate/localSafety'
+import { normalizedOpacity, placementDraw } from '../generate/localEngineMath'
 import { seamCrop, seamRectPt } from '../seam/slices'
 import { readStampAssets } from '../library/storage'
+import { snapshotContentTransform, stampedSnapshotGeometry, type SnapshotGeometry, type SourcePageGeometry } from './snapshotGeometry'
 
 const MAX_SNAPSHOT_EDGE = 4096
 const SNAPSHOT_SCALE = 2.5
+const geometryCache = new WeakMap<Blob, Promise<SourcePageGeometry[]>>()
+const snapshotSizes = new WeakMap<HTMLCanvasElement, { widthPt: number; heightPt: number }>()
+
+/** Physical output size, which can differ from the imported unrotated page. */
+export function pageSnapshotSize(canvas: HTMLCanvasElement) {
+  return snapshotSizes.get(canvas)
+}
+
+function sourcePageGeometry(file: PDFFile): Promise<SourcePageGeometry[]> {
+  const cached = geometryCache.get(file.blob)
+  if (cached) return cached
+  const pending = (async () => {
+    const [{ PDFDocument }, buffer] = await Promise.all([import('pdf-lib'), file.blob.arrayBuffer()])
+    let bytes: Uint8Array<ArrayBufferLike> = new Uint8Array(buffer)
+    let pdf
+    try {
+      pdf = await PDFDocument.load(bytes, { updateMetadata: false })
+    } catch (error) {
+      if (!isEncryptedPdfError(error)) throw error
+      const { decryptPdf } = await import('../generate/qpdf')
+      bytes = await decryptPdf(bytes, file.password ?? '')
+      pdf = await PDFDocument.load(bytes, { updateMetadata: false })
+    }
+    // Retain only numbers, never a second parsed document or its input bytes.
+    return pdf.getPages().map((page) => ({ crop: page.getCropBox(), media: page.getMediaBox(), rotation: page.getRotation().angle }))
+  })().catch((error: unknown) => {
+    geometryCache.delete(file.blob)
+    throw error
+  })
+  geometryCache.set(file.blob, pending)
+  return pending
+}
 
 type OverlaySnapshot = {
   config: FileConfig
@@ -90,22 +124,20 @@ function seamVisualForPage(file: PDFFile, pageNumber: number, snapshot: OverlayS
 async function drawPlacement(
   context: CanvasRenderingContext2D,
   snapshot: OverlaySnapshot,
-  pageInfo: PageInfo,
+  geometry: SnapshotGeometry,
   placement: Placement,
   scale: number
 ) {
   const stamp = snapshot.stamps.find((item) => item.stampId === placement.stampId)
   if (!stamp) throw new Error('引用的印章已不可用，请重新选择。')
   const img = await snapshotImage(snapshot, stamp.stampId)
-  const x = placement.xPt * scale
-  const top = (pageInfo.heightPt - placement.yPt - placement.heightPt) * scale
-  const width = placement.widthPt * scale
-  const height = placement.heightPt * scale
+  const spec = placementDraw(placement, stamp.widthPx, stamp.heightPx, geometry.stampBox.x, geometry.stampBox.y)
+  const s = scale * geometry.userUnit
   context.save()
-  context.globalAlpha = placement.opacity
-  context.translate(x + width / 2, top + height / 2)
-  context.rotate((placement.rotation * Math.PI) / 180)
-  context.drawImage(img, -width / 2, -height / 2, width, height)
+  context.globalAlpha = normalizedOpacity(placement.opacity)
+  context.translate((spec.x - geometry.view.x) * s, (geometry.view.y + geometry.view.height - spec.y) * s)
+  context.rotate((-spec.rotateDeg * Math.PI) / 180)
+  context.drawImage(img, 0, -spec.height * s, spec.width * s, spec.height * s)
   context.restore()
 }
 
@@ -114,11 +146,12 @@ async function drawPageOverlays(
   file: PDFFile,
   pageInfo: PageInfo,
   scale: number,
-  snapshot: OverlaySnapshot
+  snapshot: OverlaySnapshot,
+  geometry: SnapshotGeometry
 ) {
   const config = snapshot.config
   for (const placement of config.placements.filter((item) => item.pageNumber === pageInfo.pageNumber)) {
-    await drawPlacement(context, snapshot, pageInfo, placement, scale)
+    await drawPlacement(context, snapshot, geometry, placement, scale)
   }
 
   const seam = seamVisualForPage(file, pageInfo.pageNumber, snapshot)
@@ -133,41 +166,104 @@ async function drawPageOverlays(
     seam.seal.side,
     seam.seal.randomSeed
   )
-  const rect = seamRectPt(pageInfo, crop, seam.seal)
+  const rect = seamRectPt(geometry.seamSize, crop, seam.seal)
+  const s = scale * geometry.userUnit
   context.save()
-  context.globalAlpha = seam.seal.opacity
+  context.globalAlpha = normalizedOpacity(seam.seal.opacity)
   context.drawImage(
     img,
     crop.sx,
     crop.sy,
     crop.sw,
     crop.sh,
-    rect.xPt * scale,
-    (pageInfo.heightPt - rect.yPt - rect.heightPt) * scale,
-    rect.widthPt * scale,
-    rect.heightPt * scale
+    (geometry.stampBox.x + rect.xPt - geometry.view.x) * s,
+    (geometry.view.y + geometry.view.height - geometry.stampBox.y - rect.yPt - rect.heightPt) * s,
+    rect.widthPt * s,
+    rect.heightPt * s
   )
   context.restore()
 }
 
-async function renderPageSnapshot(doc: PDFDocumentProxy, file: PDFFile, pageInfo: PageInfo, snapshot: OverlaySnapshot) {
+async function renderPageSnapshot(
+  doc: PDFDocumentProxy,
+  file: PDFFile,
+  pageInfo: PageInfo,
+  snapshot: OverlaySnapshot,
+  requestedScale?: number,
+  signal?: AbortSignal
+) {
+  signal?.throwIfAborted()
   const page = await doc.getPage(pageInfo.pageNumber)
-  const scale = snapshotScale(pageInfo)
+  signal?.throwIfAborted()
+  const hasOverlays = snapshot.config.placements.length > 0 || Boolean(seamVisualForPage(file, pageInfo.pageNumber, snapshot))
+  let geometry: SnapshotGeometry | undefined
+  if (hasOverlays) {
+    const source = (await sourcePageGeometry(file))[pageInfo.pageNumber - 1]
+    if (!source) throw new Error('页面已不可用，请重新选择文档。')
+    geometry = stampedSnapshotGeometry(source, page.userUnit)
+  }
+  signal?.throwIfAborted()
+  const base = page.getViewport({ scale: 1 })
+  const widthPt = geometry ? geometry.view.width * geometry.userUnit : base.width
+  const heightPt = geometry ? geometry.view.height * geometry.userUnit : base.height
+  const limit = requestedScale === undefined ? MAX_SNAPSHOT_EDGE : 4000
+  const scale = Math.min(requestedScale ?? snapshotScale(pageInfo), limit / Math.max(widthPt, heightPt))
   const viewport = page.getViewport({ scale })
+  if (geometry) {
+    // The engine bakes /Rotate into content before adding stamps. Render that
+    // same content matrix, rather than mixing rotated pixels with raw boxes.
+    const { view } = geometry
+    viewport.width = widthPt * scale
+    viewport.height = heightPt * scale
+    viewport.viewBox = [view.x, view.y, view.x + view.width, view.y + view.height]
+    viewport.transform = snapshotContentTransform(geometry, scale)
+  }
   const canvas = document.createElement('canvas')
-  canvas.width = Math.max(1, Math.round(viewport.width))
-  canvas.height = Math.max(1, Math.round(viewport.height))
-  const context = canvas.getContext('2d', { alpha: false })
+  const round = requestedScale === undefined ? Math.round : Math.floor
+  canvas.width = Math.max(1, round(viewport.width))
+  canvas.height = Math.max(1, round(viewport.height))
+  snapshotSizes.set(canvas, { widthPt, heightPt })
+  // Match scan/processor's alpha-enabled surface: an opaque Canvas can use LCD
+  // text antialiasing, introducing colored glyph fringes absent from output.
+  const context = canvas.getContext('2d', { alpha: requestedScale !== undefined })
   if (!context) throw new Error('无法创建画布')
   context.fillStyle = '#fff'
   context.fillRect(0, 0, canvas.width, canvas.height)
+  let renderTask: ReturnType<typeof page.render> | undefined
+  const cancel = () => renderTask?.cancel()
   try {
-    await page.render({ canvas, canvasContext: context, viewport }).promise
-    await drawPageOverlays(context, file, pageInfo, scale, snapshot)
+    renderTask = page.render({ canvas, canvasContext: context, viewport })
+    signal?.addEventListener('abort', cancel, { once: true })
+    await renderTask.promise
+    signal?.throwIfAborted()
+    if (geometry) await drawPageOverlays(context, file, pageInfo, scale, snapshot, geometry)
+    signal?.throwIfAborted()
     return canvas
   } catch (error) {
     canvas.width = canvas.height = 0
     throw error
+  } finally {
+    signal?.removeEventListener('abort', cancel)
+  }
+}
+
+/** A stable current-page composition shared by scan preview and page exports. */
+export async function renderPagePreview(
+  doc: PDFDocumentProxy,
+  file: PDFFile,
+  pageInfo: PageInfo,
+  state: EditorState,
+  scale: number,
+  signal: AbortSignal
+) {
+  let snapshot: OverlaySnapshot | undefined
+  try {
+    signal.throwIfAborted()
+    snapshot = await overlaySnapshot(file, pageInfo.pageNumber, state)
+    signal.throwIfAborted()
+    return await renderPageSnapshot(doc, file, pageInfo, snapshot, scale, signal)
+  } finally {
+    releaseSnapshot(snapshot)
   }
 }
 
@@ -231,7 +327,8 @@ function makeJpegPdf(jpeg: Uint8Array, imageWidth: number, imageHeight: number, 
 async function rasterPdfFromCanvas(canvas: HTMLCanvasElement, pageInfo: PageInfo) {
   const jpegBlob = await canvasBlob(canvas, 'image/jpeg', 0.94)
   const jpeg = new Uint8Array(await jpegBlob.arrayBuffer())
-  return makeJpegPdf(jpeg, canvas.width, canvas.height, pageInfo.widthPt, pageInfo.heightPt)
+  const size = pageSnapshotSize(canvas) ?? pageInfo
+  return makeJpegPdf(jpeg, canvas.width, canvas.height, size.widthPt, size.heightPt)
 }
 
 /** 单页盖章/加密完全在浏览器完成，页码已重映射到 1。 */

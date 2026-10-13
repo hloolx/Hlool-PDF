@@ -1,88 +1,27 @@
-import { useEffect, useRef, useState } from 'react'
-import { Sparkles } from 'lucide-react'
+import { ArrowLeft, PanelRightClose, Sparkles } from 'lucide-react'
 import { cx } from '../../lib/cx'
 import { DEFAULT_SCAN, type ScanConfig } from '../../lib/types'
-import { activeConfig, activeFile, useEditorStore } from '../../state/store'
+import { activeConfig, rightDocked, useEditorStore } from '../../state/store'
 import { Button } from '../../ui/Button'
 import { Field, NumberField } from '../../ui/Field'
 import { Section } from '../../ui/Section'
 import { Segmented } from '../../ui/Segmented'
 import { Slider } from '../../ui/Slider'
 import { Switch } from '../../ui/Switch'
-import { applyScanEffect } from '../scan/canvas'
 import { SCAN_PRESETS } from '../scan/presets'
-import { usePdfDocument } from '../viewer/usePdfDocument'
-
-/** 预览渲染宽度（px）。约为面板宽的 2 倍，缩小显示后依然清晰，重绘也便宜。 */
-const PREVIEW_RENDER_WIDTH = 520
-
-/** 当前页 + 当前参数的实时预览。参数变化 300ms 防抖重绘；预览不加随机偏转，便于对比微调。 */
-function ScanPreview({ config }: { config: ScanConfig }) {
-  const file = useEditorStore((state) => activeFile(state))
-  const currentPage = useEditorStore((state) => state.currentPage)
-  const { doc } = usePdfDocument(file?.blob ?? null, file?.password)
-  const holderRef = useRef<HTMLDivElement>(null)
-  const [rendering, setRendering] = useState(false)
-
-  useEffect(() => {
-    const holder = holderRef.current
-    if (!doc || !holder) return
-    let stale = false
-    let cancelRender: (() => void) | null = null
-    setRendering(true)
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const page = await doc.getPage(Math.max(1, Math.min(currentPage, doc.numPages)))
-          const base = page.getViewport({ scale: 1 })
-          const viewport = page.getViewport({ scale: PREVIEW_RENDER_WIDTH / base.width })
-          const canvas = document.createElement('canvas')
-          canvas.width = Math.floor(viewport.width)
-          canvas.height = Math.floor(viewport.height)
-          const ctx = canvas.getContext('2d')
-          if (!ctx) return
-          const renderTask = page.render({ canvas, canvasContext: ctx, viewport })
-          cancelRender = () => renderTask.cancel()
-          await renderTask.promise
-          if (stale) return
-          const processed = applyScanEffect(canvas, config, { randomize: false })
-          processed.className = 'block h-auto w-full'
-          holder.replaceChildren(processed)
-        } catch {
-          /* 渲染被取消或失败：保留上一帧，不打断参数编辑。 */
-        } finally {
-          if (!stale) setRendering(false)
-        }
-      })()
-    }, 300)
-    return () => {
-      stale = true
-      window.clearTimeout(timer)
-      cancelRender?.()
-    }
-  }, [doc, currentPage, config])
-
-  if (!file) return null
-  return (
-    <Section title="预览" defaultOpen>
-      <div
-        className={cx(
-          'min-h-24 overflow-hidden rounded-lg border border-line bg-sunken transition-opacity',
-          rendering && 'opacity-60'
-        )}
-      >
-        <div ref={holderRef} />
-      </div>
-      <p className="mt-1 text-xs text-ink-muted">
-        第 {Math.max(1, Math.min(currentPage, file.pageCount))} 页 · 生成时每页会叠加随机偏转
-      </p>
-    </Section>
-  )
-}
 
 export function ScanInspector() {
   const config = useEditorStore((state) => activeConfig(state).scanConfig ?? DEFAULT_SCAN)
   const setScanConfig = useEditorStore((state) => state.setScanConfig)
+  const enabled = useEditorStore((state) => Boolean(activeConfig(state).scanEnabled))
+  const docked = useEditorStore(rightDocked)
+
+  function returnToDocument() {
+    const state = useEditorStore.getState()
+    state.select(null)
+    state.arm(null)
+    state.closeMobilePanel()
+  }
 
   function applyPreset(presetKey: string) {
     const preset = SCAN_PRESETS[presetKey]
@@ -93,7 +32,17 @@ export function ScanInspector() {
 
   return (
     <div>
-      <div className="flex items-center gap-2.5 border-b border-line/70 py-3">
+      <div className="sticky top-0 z-10 border-b border-line bg-panel py-2">
+        <Button size="sm" className="w-full justify-start" onClick={returnToDocument}>
+          <ArrowLeft size={16} />返回文档
+        </Button>
+        {!docked && (
+          <Button size="sm" className="mt-1 w-full justify-start" onClick={() => useEditorStore.getState().closeMobilePanel()}>
+            <PanelRightClose size={16} />收起参数，查看预览
+          </Button>
+        )}
+      </div>
+      <div className="flex items-center gap-2.5 py-3">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
           <Sparkles size={20} />
         </span>
@@ -103,7 +52,13 @@ export function ScanInspector() {
         </div>
       </div>
 
-      <ScanPreview config={config} />
+      <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg border border-line px-2.5 py-2 text-[13px]">
+        <span>生成时应用扫描效果</span>
+        <Switch checked={enabled} onChange={(checked) => useEditorStore.getState().setScanEnabled(checked)} />
+      </label>
+      <p className="mt-2 text-xs leading-relaxed text-ink-muted">
+        预览显示在文档工作区，包含普通章与骑缝章。生成时每页会叠加随机偏转；退出预览会保留扫描设置。
+      </p>
 
       <Section title="预设" defaultOpen>
         <div className="grid grid-cols-2 gap-2">

@@ -95,7 +95,11 @@ export function DocumentPanel({ file }: { file: PDFFile }) {
             type="button"
             className="flex-1 text-left transition-colors hover:text-accent disabled:pointer-events-none"
             disabled={!summary.scanEnabled}
-            onClick={() => select({ kind: 'scan' })}
+            onClick={() => {
+              useEditorStore.getState().arm(null)
+              select({ kind: 'scan' })
+              useEditorStore.getState().closeMobilePanel()
+            }}
             title={summary.scanEnabled ? '点击编辑扫描效果参数' : undefined}
           >
             <div className="flex items-center gap-1.5">
@@ -103,10 +107,17 @@ export function DocumentPanel({ file }: { file: PDFFile }) {
               <span>扫描效果</span>
             </div>
             <span className="ml-1.5 text-xs text-ink-muted">
-              {summary.scanEnabled ? '已启用 · 点击编辑' : '让 PDF 看起来像打印扫描的'}
+              {summary.scanEnabled ? '已启用 · 预览与调整' : '让 PDF 看起来像打印扫描的'}
             </span>
           </button>
-          <Switch checked={summary.scanEnabled} onChange={(checked) => setScanEnabled(checked)} />
+          <label className="inline-flex">
+            <span className="sr-only">启用扫描效果</span>
+            <Switch checked={summary.scanEnabled} onChange={(checked) => {
+              useEditorStore.getState().arm(null)
+              setScanEnabled(checked)
+              if (checked) useEditorStore.getState().closeMobilePanel()
+            }} />
+          </label>
         </div>
       </Section>
 
