@@ -1,6 +1,6 @@
 .git
 dist/
-web/node_modules/
+**/node_modules/
 web/dist/
 internal/webui/dist/
 .hlool-data/
@@ -9,3 +9,8 @@ internal/webui/dist/
 .tmp*
 *.log
 *.exe~
+.gotmp/
+web/.test-work/
+web/test-results/
+web/playwright-report/
+scripts/verify-local-engine/.work/

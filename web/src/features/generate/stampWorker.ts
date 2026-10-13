@@ -1,7 +1,7 @@
 /**
  * 本地盖章 Web Worker 壳：大文件的解锁/盖章/加密不占主线程（LOCAL_FIRST.md P3）。
- * 消息协议：入 StampJobInput（buffer 走 transfer），出 { ok, bytes | error }。
- * 业务错误经 onmessage 回传（调用方回退云端）；Worker 自身起不来由调用方降级主线程。
+ * 消息协议：先发 ready，入 StampJobInput（Blob），出 { ok, bytes | error }。
+ * 业务错误直接显示给用户；仅 Worker 启动失败才在主线程处理。
  */
 import type { StampJobInput } from './actions'
 import { runStampJobInline } from './stampJob'
@@ -17,3 +17,5 @@ self.onmessage = async (event: MessageEvent<StampJobInput>) => {
     port.postMessage({ ok: false, error: err instanceof Error ? err.message : String(err) })
   }
 }
+
+port.postMessage({ ready: true })

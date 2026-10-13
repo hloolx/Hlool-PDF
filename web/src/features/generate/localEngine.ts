@@ -15,7 +15,7 @@
  * 差异（有意不复刻）：placements 旋转恰为 ±90.000 时 pdfcpu 的边界对齐特例
  * （矩形章偏移 |W−H|/2 的「预览≠产物」怪癖）—— 本地始终绕中心。
  *
- * 失败策略：任何异常直接抛出，由 processFile 路由层捕获后回退云端管线。
+ * 失败策略：任何异常直接抛出，由 processFile 显示可操作的本地错误。
  * 本模块是懒加载分包（pdf-lib 很重），严禁被入口包静态引用（拆包约定见
  * features/workspace/boot.ts）。
  */
@@ -59,12 +59,15 @@ export async function stampPdfLocally(
   const placements = params.placements ?? []
   const seams = params.seamSeals ?? []
   const src = pdfBytes instanceof Uint8Array ? pdfBytes : new Uint8Array(pdfBytes)
+  if (!new TextDecoder('ascii').decode(src.subarray(0, 1024)).includes('%PDF-')) {
+    throw new Error('无法识别 PDF 文件，请从原软件重新导出有效的 PDF 后导入。')
+  }
   if (placements.length === 0 && seams.length === 0) {
     // 直通导出：与服务端 copyFile 同义，源字节原样输出。
     return src.slice()
   }
 
-  // 加密 / 损坏的 PDF 在这里抛错 → 路由层回退云端。
+  // 加密由作业层解锁；损坏的 PDF 直接向用户报告错误。
   const doc = await PDFDocument.load(src, { updateMetadata: false })
   const pages = doc.getPages()
 
@@ -83,9 +86,17 @@ export async function stampPdfLocally(
   })
 
   for (const pl of placements) {
-    if (pl.pageNumber < 1 || pl.pageNumber > pages.length) throw new Error(`页码越界: ${pl.pageNumber}`)
-    if (!(pl.widthPt > 0)) throw new Error('印章宽度必须大于 0')
+    if (!Number.isInteger(pl.pageNumber) || pl.pageNumber < 1 || pl.pageNumber > pages.length) throw new Error(`页码越界: ${pl.pageNumber}`)
+    if (![pl.xPt, pl.yPt, pl.widthPt, pl.heightPt, pl.rotation, pl.opacity].every(Number.isFinite)) {
+      throw new Error('印章参数包含无效数值，请重新设置位置、尺寸或透明度。')
+    }
+    if (!(pl.widthPt > 0) || !(pl.heightPt > 0)) throw new Error('印章宽度和高度必须大于 0')
+    if (pl.opacity < 0 || pl.opacity > 1) throw new Error('印章透明度必须介于 0 和 1 之间')
     if (!stamps[pl.stampId]) throw new Error(`缺少印章数据: ${pl.stampId}`)
+    const asset = stamps[pl.stampId]
+    if (!(asset.widthPx > 0) || !(asset.heightPx > 0) || !Number.isFinite(asset.widthPx) || !Number.isFinite(asset.heightPx)) {
+      throw new Error('印章图片尺寸无效，请重新导入印章。')
+    }
   }
   for (const plan of seamPlans) {
     if (!stamps[plan.seal.stampId]) throw new Error(`缺少印章数据: ${plan.seal.stampId}`)
@@ -161,6 +172,9 @@ function toU8(bytes: ArrayBuffer | Uint8Array): Uint8Array {
 
 /** 服务端 buildSeamWatermarks 的参数归一：非法值落到与 pdf.go:283-299 相同的缺省。 */
 function normalizeSeal(seal: SeamSealParam) {
+  if (![seal.sizePt, seal.positionPercent, seal.marginPt, seal.opacity, seal.maxSlices, seal.randomSeed].every(Number.isFinite)) {
+    throw new Error('骑缝章参数包含无效数值，请重新设置。')
+  }
   const side = (['left', 'right', 'top', 'bottom'] as const).includes(seal.side) ? seal.side : 'right'
   return {
     ...seal,
@@ -172,7 +186,7 @@ function normalizeSeal(seal: SeamSealParam) {
   }
 }
 
-/** PNG/JPEG 以字节头识别；其余格式不支持（抛错 → 回退云端，与服务端 image.Decode 支持面对齐）。 */
+/** PNG/JPEG 以字节头识别；其余格式不支持，应在印章导入时转换。 */
 async function embedImageBytes(doc: PDFDocument, bytes: Uint8Array): Promise<PDFImage> {
   if (bytes.length > 3 && bytes[0] === 0x89 && bytes[1] === 0x50) return embedWithInterpolate(await doc.embedPng(bytes))
   if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) return embedWithInterpolate(await doc.embedJpg(bytes))

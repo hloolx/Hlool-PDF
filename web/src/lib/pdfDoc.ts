@@ -1,5 +1,5 @@
 import { fileFingerprint } from './fingerprint'
-import { pdfjsLib } from './pdfjs'
+import { loadPdf } from './pdfjs'
 import type { PageInfo, PDFFile } from './types'
 
 /** 浏览器端生成的工作区文件 id（仅本会话有效，PDF 字节存内存）。 */
@@ -18,8 +18,9 @@ export function isPasswordException(err: unknown): boolean {
  */
 export async function readPdfPages(blob: Blob, password?: string): Promise<PageInfo[]> {
   const data = await blob.arrayBuffer()
-  const doc = await pdfjsLib.getDocument({ data, password }).promise
+  const loading = loadPdf(data, password)
   try {
+    const doc = await loading.promise
     const pages: PageInfo[] = []
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i)
@@ -28,7 +29,7 @@ export async function readPdfPages(blob: Blob, password?: string): Promise<PageI
     }
     return pages
   } finally {
-    await doc.destroy()
+    await loading.destroy()
   }
 }
 

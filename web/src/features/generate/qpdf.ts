@@ -15,6 +15,7 @@ import wasmUrl from '@neslinesli93/qpdf-wasm/dist/qpdf.wasm?url'
 type QpdfFS = {
   writeFile: (path: string, data: Uint8Array) => void
   readFile: (path: string) => Uint8Array
+  unlink: (path: string) => void
 }
 
 async function runQpdf(args: string[], input: Uint8Array): Promise<Uint8Array> {
@@ -23,34 +24,42 @@ async function runQpdf(args: string[], input: Uint8Array): Promise<Uint8Array> {
   const qpdf = await (createModule as unknown as (opts: object) => Promise<{ callMain: (a: string[]) => number; FS: QpdfFS }>)({
     locateFile: () => wasmUrl,
     noInitialRun: true,
-    // 静默 qpdf 的 stdout/stderr（Emscripten 默认打到 console）。
-    print: () => {},
-    printErr: () => {}
+    // 此版本 qpdf 默认将诊断写到 console，用户提示由退出码转换。
   })
-  qpdf.FS.writeFile('/in.pdf', input)
-  let code: number
   try {
-    code = qpdf.callMain(args)
-  } catch (err) {
-    // Emscripten 以 ExitStatus 异常表达非零退出。
-    const status = (err as { status?: number }).status
-    if (typeof status === 'number') code = status
-    else throw err
+    qpdf.FS.writeFile('/in.pdf', input)
+    let code: number
+    try {
+      code = qpdf.callMain(args)
+    } catch (err) {
+      // Emscripten 以 ExitStatus 异常表达非零退出。
+      const status = err && typeof err === 'object' ? (err as { status?: number }).status : undefined
+      if (typeof status === 'number') code = status
+      else throw err
+    }
+    // qpdf 退出码 3 = 带警告成功。
+    if (code !== 0 && code !== 3) {
+      throw new Error(`无法处理这份 PDF 的密码（错误码 ${code}）。请检查打开密码，或从原软件重新导出后重试。`)
+    }
+    return qpdf.FS.readFile('/out.pdf')
+  } finally {
+    // 尤其是主线程降级时，及时释放 wasm 虚拟文件中的 PDF 副本。
+    for (const path of ['/in.pdf', '/out.pdf']) {
+      try { qpdf.FS.unlink(path) } catch { /* 失败的作业可能还未创建文件。 */ }
+    }
   }
-  // qpdf 退出码 3 = 带警告成功。
-  if (code !== 0 && code !== 3) throw new Error(`qpdf 处理失败（退出码 ${code}）`)
-  return qpdf.FS.readFile('/out.pdf')
 }
 
 /** AES-256 加密（权限全开）。owner 密码为空时沿用打开密码，与服务端一致。 */
 export async function encryptPdf(bytes: Uint8Array, userPassword: string, ownerPassword = ''): Promise<Uint8Array> {
   if (!userPassword) throw new Error('缺少输出密码')
+  if (userPassword.includes('\0') || ownerPassword.includes('\0')) throw new Error('密码不能包含空字符，请重新输入。')
   const owner = ownerPassword || userPassword
   return runQpdf(['--encrypt', userPassword, owner, '256', '--', '/in.pdf', '/out.pdf'], bytes)
 }
 
 /** 用打开密码解锁，输出明文 PDF（服务端 DecryptPDF 同义）。 */
 export async function decryptPdf(bytes: Uint8Array, password: string): Promise<Uint8Array> {
-  if (!password) throw new Error('缺少打开密码')
+  if (password.includes('\0')) throw new Error('密码不能包含空字符，请重新输入。')
   return runQpdf([`--password=${password}`, '--decrypt', '/in.pdf', '/out.pdf'], bytes)
 }

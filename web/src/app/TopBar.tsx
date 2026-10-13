@@ -1,14 +1,12 @@
 import { useRef } from 'react'
 import {
   ChevronDown,
-  Cloud,
   FileText,
   FileUp,
   Keyboard,
   Laptop,
   Layers,
   Loader2,
-  LogOut,
   MoreHorizontal,
   Moon,
   PanelLeftClose,
@@ -16,14 +14,9 @@ import {
   PanelRight,
   Play,
   Redo2,
-  ShieldCheck,
   Sun,
-  ToggleLeft,
-  ToggleRight,
   Trash2,
   Undo2,
-  UserPlus,
-  UserRound,
   ZoomIn
 } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
@@ -44,12 +37,10 @@ import {
 import { Button, ConfirmButton, IconButton } from '../ui/Button'
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from '../ui/Menu'
 import { Tip } from '../ui/Tooltip'
-import { decideRoute, generateAll, generateCurrent, generationStatus, outputNameFor, type ProcessRoute } from '../features/generate/actions'
+import { generateAll, generateCurrent, generationStatus, outputNameFor } from '../features/generate/actions'
 import { toggleTheme } from '../features/theme/ThemeFx'
 import { applyConfigToAllFiles, deleteFileAction, importPicked } from '../features/workspace/actions'
-import { logout } from '../features/auth/api'
-import { useAuth } from '../features/auth/useAuth'
-import { resetSettingsSync } from '../features/library/settings'
+import { LocalDataMenu } from '../features/local/LocalDataMenu'
 import { useShortcutHelp } from '../features/help/ShortcutHelp'
 
 function TopBarDivider() {
@@ -70,14 +61,13 @@ export function TopBar() {
         <TopBarDivider />
         <HelpButton />
         <ThemeToggle />
-        <UserMenu />
         <RightPanelToggle />
         <TopBarDivider />
       </div>
       <div className="flex items-center gap-1.5 md:hidden">
-        <UserMenu />
         <MobileMoreMenu />
       </div>
+      <LocalDataMenu />
       <GenerateSplitButton />
     </header>
   )
@@ -93,6 +83,7 @@ function BrandLeftPanelToggle() {
     <Tip label={label}>
       <button
         type="button"
+        data-panel-toggle="left"
         aria-label={label}
         aria-pressed={open}
         className="group flex h-10 shrink-0 items-center gap-2 rounded-lg pl-1 pr-2 text-left transition duration-150 hover:bg-sunken active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/60"
@@ -118,7 +109,7 @@ function RightPanelToggle() {
   const toggle = useEditorStore((state) => state.toggleRightPanel)
   return (
     <Tip label={open ? '隐藏属性检查器' : '显示属性检查器'}>
-      <IconButton aria-label="切换右侧面板" aria-pressed={open} onClick={() => toggle()}>
+      <IconButton data-panel-toggle="right" aria-label="切换右侧面板" aria-pressed={open} onClick={() => toggle()}>
         <PanelRight size={20} className={cx(!open && 'text-ink-muted')} />
       </IconButton>
     </Tip>
@@ -140,9 +131,9 @@ function BusyChip() {
   const busy = useEditorStore((state) => state.busy)
   if (!busy) return null
   return (
-    <span className="flex items-center gap-1.5 rounded-full bg-sunken px-2.5 py-1 text-xs text-ink-muted">
-      <Loader2 size={15} className="animate-spin" />
-      {busy}
+    <span role="status" aria-label={busy} className="flex min-w-0 max-w-[200px] items-center gap-1.5 rounded-full bg-sunken px-2.5 py-1 text-xs text-ink-muted">
+      <Loader2 size={15} className="shrink-0 animate-spin" aria-hidden />
+      <span className="hidden truncate xl:inline">{busy}</span>
     </span>
   )
 }
@@ -151,13 +142,14 @@ function FileMenu() {
   const file = useEditorStore(activeFile)
   const files = useEditorStore((state) => state.files)
   const configs = useEditorStore((state) => state.configs)
+  const busy = useEditorStore((state) => Boolean(state.busy))
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   return (
     <>
       <Menu>
         <MenuTrigger asChild>
-          <Button className="max-w-[300px]">
+          <Button className="max-w-[36vw] sm:max-w-[300px]">
             <FileText size={16} className="shrink-0 text-ink-muted" />
             <span className="truncate">{file ? file.name : '导入 PDF / 图片…'}</span>
             {file && <span className="tnum shrink-0 text-xs text-ink-muted">{file.pageCount} 页</span>}
@@ -167,7 +159,7 @@ function FileMenu() {
             <ChevronDown size={15} className="shrink-0 text-ink-muted" />
           </Button>
         </MenuTrigger>
-        <MenuContent align="start" className="w-[320px]">
+        <MenuContent align="start" className="max-h-[var(--radix-dropdown-menu-content-available-height)] w-[320px] max-w-[calc(100vw-1rem)] overflow-y-auto">
           {files.length > 0 && <MenuLabel>文件列表（配置随文件保存，切换不丢失）</MenuLabel>}
           <div className="max-h-72 overflow-y-auto">
             {files.map((item) => (
@@ -199,11 +191,11 @@ function FileMenu() {
             ))}
           </div>
           {files.length > 0 && <MenuSeparator />}
-          <MenuItem onSelect={() => inputRef.current?.click()}>
+          <MenuItem disabled={busy} onSelect={() => inputRef.current?.click()}>
             <FileUp size={16} />
             导入 PDF / 图片…
           </MenuItem>
-          <MenuItem disabled={files.length < 2 || !hasConfig(file ? configs[file.fileId] : undefined)} onSelect={applyConfigToAllFiles}>
+          <MenuItem disabled={busy || files.length < 2 || !hasConfig(file ? configs[file.fileId] : undefined)} onSelect={applyConfigToAllFiles}>
             <Layers size={16} />
             将当前配置应用到其他文件
           </MenuItem>
@@ -212,9 +204,11 @@ function FileMenu() {
       <input
         ref={inputRef}
         type="file"
+        aria-label="导入工作区 PDF 或图片"
         accept="application/pdf,image/png,image/jpeg,image/webp"
         multiple
         className="hidden"
+        disabled={busy}
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? [])
           event.currentTarget.value = ''
@@ -227,15 +221,16 @@ function FileMenu() {
 
 function UndoRedo() {
   const { pastStates, futureStates } = useTemporal()
+  const busy = useEditorStore((state) => Boolean(state.busy))
   return (
     <div className="flex items-center">
       <Tip label="撤销 (Ctrl+Z)">
-        <IconButton disabled={pastStates.length === 0} onClick={() => undo()} aria-label="撤销">
+        <IconButton disabled={busy || pastStates.length === 0} onClick={() => undo()} aria-label="撤销">
           <Undo2 size={20} />
         </IconButton>
       </Tip>
       <Tip label="重做 (Ctrl+Shift+Z)">
-        <IconButton disabled={futureStates.length === 0} onClick={() => redo()} aria-label="重做">
+        <IconButton disabled={busy || futureStates.length === 0} onClick={() => redo()} aria-label="重做">
           <Redo2 size={20} />
         </IconButton>
       </Tip>
@@ -277,67 +272,9 @@ function ThemeToggle() {
   )
 }
 
-async function signOut() {
-  try {
-    await logout()
-  } catch {
-    /* 即便请求失败也按本地登出处理 */
-  }
-  resetSettingsSync()
-  useEditorStore.getState().resetWorkspace()
-  useAuth.getState().setAnon()
-}
-
-function UserMenu() {
-  const user = useAuth((state) => state.user)
-  const setPromptLogin = useAuth((state) => state.setPromptLogin)
-  const isGuest = user?.isGuest ?? false
-  const isAdmin = user?.isAdmin ?? false
-  return (
-    <Menu>
-      <MenuTrigger asChild>
-        <IconButton aria-label="账户">
-          <span className="relative inline-flex">
-            <UserRound size={20} className={cx(isGuest && 'text-ink-muted')} />
-            {isGuest && (
-              <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-accent ring-2 ring-panel" aria-hidden />
-            )}
-          </span>
-        </IconButton>
-      </MenuTrigger>
-      <MenuContent className="min-w-52">
-        {isGuest ? (
-          <>
-            <MenuLabel>临时身份 · 约 24 小时后清除</MenuLabel>
-            <MenuSeparator />
-            <MenuItem onSelect={() => setPromptLogin(true)}>
-              <UserPlus size={16} />
-              注册 / 登录以长期保存
-            </MenuItem>
-          </>
-        ) : (
-          <>
-            <MenuLabel>{user?.username || '已登录'}</MenuLabel>
-            <MenuSeparator />
-            {isAdmin && (
-              <MenuItem onSelect={() => (window.location.href = '/admin')}>
-                <ShieldCheck size={16} />
-                管理员后台
-              </MenuItem>
-            )}
-            <MenuItem onSelect={() => void signOut()}>
-              <LogOut size={16} />
-              退出登录
-            </MenuItem>
-          </>
-        )}
-      </MenuContent>
-    </Menu>
-  )
-}
-
 function MobileMoreMenu() {
   const { pastStates, futureStates } = useTemporal()
+  const busy = useEditorStore((state) => Boolean(state.busy))
   const theme = useEditorStore((state) => state.theme)
   const open = useEditorStore(rightPanelOpen)
   const toggle = useEditorStore((state) => state.toggleRightPanel)
@@ -348,16 +285,16 @@ function MobileMoreMenu() {
   return (
     <Menu>
       <MenuTrigger asChild>
-        <IconButton aria-label="更多">
+        <IconButton data-panel-toggle="right" aria-label="更多">
           <MoreHorizontal size={20} />
         </IconButton>
       </MenuTrigger>
-      <MenuContent align="end" className="w-52">
-        <MenuItem disabled={pastStates.length === 0} onSelect={() => undo()}>
+      <MenuContent align="end" className="max-h-[var(--radix-dropdown-menu-content-available-height)] w-52 overflow-y-auto">
+        <MenuItem disabled={busy || pastStates.length === 0} onSelect={() => undo()}>
           <Undo2 size={16} />
           撤销
         </MenuItem>
-        <MenuItem disabled={futureStates.length === 0} onSelect={() => redo()}>
+        <MenuItem disabled={busy || futureStates.length === 0} onSelect={() => redo()}>
           <Redo2 size={16} />
           重做
         </MenuItem>
@@ -385,19 +322,12 @@ function MobileMoreMenu() {
   )
 }
 
-/** 出件路径徽标：与执行共用 decideRoute，保证「显示的路径」即「实际走的路径」。 */
-function RouteBadge({ route }: { route: ProcessRoute }) {
-  const local = route.kind === 'local'
+function LocalProcessingBadge() {
   return (
-    <Tip label={local ? '本地处理：文件不上传服务器，处理速度只取决于这台电脑' : `云端处理：${route.reason ?? ''}`}>
-      <span
-        className={cx(
-          'mr-1.5 hidden h-10 shrink-0 items-center gap-1 rounded-lg px-2 text-xs sm:flex',
-          local ? 'text-ink-muted' : 'bg-sunken text-ink-muted'
-        )}
-      >
-        {local ? <Laptop size={14} /> : <Cloud size={14} />}
-        {local ? '本地' : '云端'}
+    <Tip label="全部在当前浏览器处理，文件不上传">
+      <span className="mr-1.5 hidden h-10 shrink-0 items-center gap-1 rounded-lg px-2 text-xs text-ink-muted lg:flex">
+        <Laptop size={14} />
+        本地处理
       </span>
     </Tip>
   )
@@ -419,29 +349,22 @@ function GenerateSplitButton() {
       }
     })
   )
-  const route = useEditorStore(
-    useShallow((state): ProcessRoute | null => {
-      const file = activeFile(state)
-      return file ? decideRoute(state, file) : null
-    })
-  )
-  const preferLocal = useEditorStore((state) => state.preferLocalProcessing)
-  const setPreferLocal = useEditorStore((state) => state.setPreferLocalProcessing)
   const localMaxMB = useEditorStore((state) => state.localMaxMB)
   const setLocalMaxMB = useEditorStore((state) => state.setLocalMaxMB)
   const generating = useEditorStore((state) => state.busy.startsWith('正在生成'))
+  const busy = useEditorStore((state) => Boolean(state.busy))
   // 三档循环：500MB（默认）→ 2GB → 不限。0 表示不限制。
   const nextLocalMax = localMaxMB === 500 ? 2048 : localMaxMB === 2048 ? 0 : 500
   const localMaxLabel = localMaxMB <= 0 ? '不限' : localMaxMB >= 1024 ? `${localMaxMB / 1024}GB` : `${localMaxMB}MB`
 
   return (
     <div className="flex">
-      {route && <RouteBadge route={route} />}
+      <LocalProcessingBadge />
       <Tip label={status.hint}>
         <Button
           variant="primary"
           className={cx('rounded-r-none', !status.ok && 'opacity-55')}
-          disabled={generating}
+          disabled={busy}
           onClick={() => void generateCurrent()}
         >
           {generating ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
@@ -454,7 +377,7 @@ function GenerateSplitButton() {
             <ChevronDown size={16} />
           </Button>
         </MenuTrigger>
-        <MenuContent className="w-80 max-w-[calc(100vw-1rem)] overflow-hidden">
+        <MenuContent className="max-h-[var(--radix-dropdown-menu-content-available-height)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto">
           <div className="grid min-w-0 gap-1 px-2.5 py-2 text-xs text-ink-muted">
             <p className="flex min-w-0 items-center justify-between gap-2">
               <span className="shrink-0">普通章</span>
@@ -470,14 +393,10 @@ function GenerateSplitButton() {
               <span className="shrink-0">输出加密</span>
               <span className="min-w-0 truncate text-right text-ink">{summary.encrypted ? 'AES-256' : '关'}</span>
             </p>
-            {route && (
-              <p className="flex min-w-0 items-center justify-between gap-2">
-                <span className="shrink-0">处理方式</span>
-                <span className="min-w-0 truncate text-right text-ink">
-                  {route.kind === 'local' ? '本地（文件不上传）' : `云端（${route.reason}）`}
-                </span>
-              </p>
-            )}
+            <p className="flex min-w-0 items-center justify-between gap-2">
+              <span className="shrink-0">处理方式</span>
+              <span className="min-w-0 truncate text-right text-ink">本地（文件不上传）</span>
+            </p>
             {summary.outputName && (
               <p className="flex min-w-0 items-center gap-2">
                 <span className="shrink-0">输出名</span>
@@ -488,36 +407,24 @@ function GenerateSplitButton() {
             )}
           </div>
           <MenuSeparator />
-          <MenuItem disabled={!status.ok} onSelect={() => void generateCurrent()}>
+          <MenuItem disabled={busy || !status.ok} onSelect={() => void generateCurrent()}>
             生成当前文件
           </MenuItem>
-          <MenuItem disabled={summary.configuredCount === 0} onSelect={() => void generateAll()}>
+          <MenuItem disabled={busy || summary.configuredCount === 0} onSelect={() => void generateAll()}>
             生成全部（{summary.configuredCount} 个已配置）
           </MenuItem>
           <MenuSeparator />
           <MenuItem
             onSelect={(event) => {
-              // 保持菜单打开，让开关的即时反馈可见（徽标与「处理方式」行同步变化）。
               event.preventDefault()
-              setPreferLocal(!preferLocal)
+              setLocalMaxMB(nextLocalMax)
             }}
           >
-            {preferLocal ? <ToggleRight size={16} className="text-accent" /> : <ToggleLeft size={16} />}
-            优先本地处理：{preferLocal ? '开' : '关'}
-            <span className="ml-auto text-xs text-ink-muted">失败自动转云端</span>
+            <Laptop size={16} />
+            文件大小保护：{localMaxLabel}
+            <span className="ml-auto text-xs text-ink-muted">点击切换</span>
           </MenuItem>
-          {preferLocal && (
-            <MenuItem
-              onSelect={(event) => {
-                event.preventDefault()
-                setLocalMaxMB(nextLocalMax)
-              }}
-            >
-              <span className="w-4" aria-hidden />
-              本地处理上限：{localMaxLabel}
-              <span className="ml-auto text-xs text-ink-muted">超过则转云端 · 点击切换</span>
-            </MenuItem>
-          )}
+          <p className="px-2.5 py-1.5 text-xs leading-relaxed text-ink-muted">超出上限会暂停生成。大型文件需要更多内存，可先拆分文件或提高上限。</p>
         </MenuContent>
       </Menu>
     </div>

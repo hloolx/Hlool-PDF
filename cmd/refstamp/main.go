@@ -2,7 +2,7 @@
 // 从 JSON 作业文件直调 internal/pdf.StampPDF（绕过 HTTP 与鉴权），
 // 产物供 scripts/verify-local-engine.mjs 与
 // web/src/features/generate/localEngine.ts 的输出做逐像素比对。
-// 仅供工装使用，不参与发布构建（build.ps1 只构建 ./cmd/hlool-pdf）。
+// 仅供开发对照测试，不参与静态网站的构建、启动或发布。
 package main
 
 import (

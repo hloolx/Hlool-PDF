@@ -1,5 +1,5 @@
 import { PDFDocument } from 'pdf-lib'
-import { pdfjsLib } from '../../lib/pdfjs'
+import { loadPdf } from '../../lib/pdfjs'
 import type { ScanConfig } from '../../lib/types'
 import { applyScanEffect, canvasToBlob } from './canvas'
 
@@ -22,8 +22,9 @@ export interface ScanProcessOptions {
 export async function processPDFWithScan(source: Blob, config: ScanConfig, options: ScanProcessOptions = {}): Promise<Blob> {
   const { password, onProgress, signal } = options
   const data = await source.arrayBuffer()
-  const doc = await pdfjsLib.getDocument({ data, password }).promise
+  const loading = loadPdf(data, password)
   try {
+    const doc = await loading.promise
     const total = doc.numPages
     const output = await PDFDocument.create()
     for (let pageNum = 1; pageNum <= total; pageNum++) {
@@ -34,20 +35,24 @@ export async function processPDFWithScan(source: Blob, config: ScanConfig, optio
       const base = page.getViewport({ scale: 1 })
       const viewport = page.getViewport({ scale: clampScale(config.scale, base.width, base.height) })
       const canvas = document.createElement('canvas')
-      canvas.width = Math.floor(viewport.width)
-      canvas.height = Math.floor(viewport.height)
-      const ctx = canvas.getContext('2d')
-      if (!ctx) throw new Error('当前浏览器不支持 Canvas')
-      await page.render({ canvas, canvasContext: ctx, viewport }).promise
-      throwIfAborted(signal)
-
-      const processed = applyScanEffect(canvas, config)
-      const bytes = await (await canvasToBlob(processed, config.outputFormat)).arrayBuffer()
-      const image = config.outputFormat === 'image/png' ? await output.embedPng(bytes) : await output.embedJpg(bytes)
-      const outPage = output.addPage([base.width, base.height])
-      outPage.drawImage(image, { x: 0, y: 0, width: base.width, height: base.height })
-
-      page.cleanup()
+      let processed: HTMLCanvasElement | undefined
+      try {
+        canvas.width = Math.max(1, Math.floor(viewport.width))
+        canvas.height = Math.max(1, Math.floor(viewport.height))
+        const ctx = canvas.getContext('2d')
+        if (!ctx) throw new Error('当前浏览器不支持 Canvas')
+        await page.render({ canvas, canvasContext: ctx, viewport }).promise
+        throwIfAborted(signal)
+        processed = applyScanEffect(canvas, config)
+        const bytes = await (await canvasToBlob(processed, config.outputFormat)).arrayBuffer()
+        const image = config.outputFormat === 'image/png' ? await output.embedPng(bytes) : await output.embedJpg(bytes)
+        const outPage = output.addPage([base.width, base.height])
+        outPage.drawImage(image, { x: 0, y: 0, width: base.width, height: base.height })
+      } finally {
+        canvas.width = canvas.height = 0
+        if (processed) processed.width = processed.height = 0
+        page.cleanup()
+      }
       // 每页之间让出事件循环,busy 进度文案才能刷新。
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
@@ -55,11 +60,12 @@ export async function processPDFWithScan(source: Blob, config: ScanConfig, optio
     const bytes = await output.save()
     return new Blob([new Uint8Array(bytes)], { type: 'application/pdf' })
   } finally {
-    void doc.destroy()
+    await loading.destroy()
   }
 }
 
 function clampScale(scale: number, widthPt: number, heightPt: number): number {
+  if (![scale, widthPt, heightPt].every(Number.isFinite) || widthPt <= 0 || heightPt <= 0) throw new Error('扫描页面尺寸或清晰度无效，请检查 PDF 与扫描设置。')
   let s = Math.min(Math.max(scale, 0.5), 3)
   const longEdge = Math.max(widthPt, heightPt)
   if (longEdge * s > MAX_EDGE_PX) s = MAX_EDGE_PX / longEdge

@@ -26,8 +26,8 @@ import { TopBar } from './TopBar'
 import { useGlobalKeys } from './useGlobalKeys'
 
 /**
- * 已认证后的主工作区。单独成模块以便 App 用 React.lazy 切包：
- * pdfjs / 画布 / 检查器等重依赖随本模块进入独立 chunk，不进入认证前的入口包。
+ * 浏览器本地资料加载后的主工作区。单独成模块以便 App 用 React.lazy 切包：
+ * pdfjs / 画布 / 检查器等重依赖随本模块进入独立 chunk。
  */
 export default function Workspace() {
   const file = useEditorStore(activeFile)
@@ -41,7 +41,22 @@ export default function Workspace() {
   const closeMobilePanel = useEditorStore((state) => state.closeMobilePanel)
   const toggleLeftPanel = useEditorStore((state) => state.toggleLeftPanel)
   const toggleRightPanel = useEditorStore((state) => state.toggleRightPanel)
+  const hasFiles = useEditorStore((state) => state.files.length > 0)
+  const busy = useEditorStore((state) => Boolean(state.busy))
   useGlobalKeys()
+
+  // PDF 字节和页面编辑仅存在内存中；让浏览器在误刷新/关闭时给出原生确认。
+  useEffect(() => {
+    if (!hasFiles && !busy) return
+    function beforeUnload(event: BeforeUnloadEvent) {
+      const state = useEditorStore.getState()
+      if (!state.files.length && !state.busy) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [hasFiles, busy])
 
   // 跟踪视口宽度：决定侧栏停靠还是浮层。
   useEffect(() => {
@@ -61,9 +76,11 @@ export default function Workspace() {
     <TipProvider>
       <div className="flex h-full flex-col">
         <TopBar />
-        <div className="relative flex min-h-0 flex-1">
+        <div className="relative flex min-h-0 flex-1 overflow-hidden">
           {leftDock && (
             <div
+              inert={!showLeft}
+              aria-hidden={!showLeft}
               className={cx(
                 'relative shrink-0 overflow-hidden transition-[width] duration-[var(--dur-base)] ease-[var(--ease-out)]',
                 showLeft ? 'w-[208px]' : 'w-0'
@@ -99,6 +116,8 @@ export default function Workspace() {
           <Viewer doc={doc} error={error} />
           {rightDock && (
             <div
+              inert={!showRight}
+              aria-hidden={!showRight}
               className={cx(
                 'relative shrink-0 overflow-hidden transition-[width] duration-[var(--dur-base)] ease-[var(--ease-out)]',
                 showRight ? 'w-[286px]' : 'w-0'
@@ -142,6 +161,8 @@ export default function Workspace() {
           )}
           {!leftDock && (
             <aside
+              inert={mobilePanel !== 'left'}
+              aria-hidden={mobilePanel !== 'left'}
               className={cx(
                 'absolute inset-y-0 left-0 z-40 flex w-[208px] max-w-[80vw] flex-col border-r border-line bg-panel shadow-pop transition-transform duration-[var(--dur-base)] ease-[var(--ease-out)]',
                 mobilePanel === 'left' ? 'translate-x-0' : 'pointer-events-none -translate-x-[110%]'
@@ -152,12 +173,14 @@ export default function Workspace() {
             </aside>
           )}
           {!rightDock && (
-            <Inspector
-              className={cx(
-                'absolute inset-y-0 right-0 z-40 max-w-[80vw] shadow-pop transition-transform duration-[var(--dur-base)] ease-[var(--ease-out)]',
-                mobilePanel === 'right' ? 'translate-x-0' : 'pointer-events-none translate-x-[110%]'
-              )}
-            />
+            <div className="contents" inert={mobilePanel !== 'right'} aria-hidden={mobilePanel !== 'right'}>
+              <Inspector
+                className={cx(
+                  'absolute inset-y-0 right-0 z-40 max-w-[80vw] shadow-pop transition-transform duration-[var(--dur-base)] ease-[var(--ease-out)]',
+                  mobilePanel === 'right' ? 'translate-x-0' : 'pointer-events-none translate-x-[110%]'
+                )}
+              />
+            </div>
           )}
         </div>
       </div>
@@ -167,7 +190,7 @@ export default function Workspace() {
       <PasswordDialog />
       <ShortcutHelp />
       <ThemeFxLayer />
-      <div className="fixed bottom-4 right-4 z-[60] flex flex-col items-end gap-2">
+      <div className="fixed bottom-4 right-4 z-[60] flex max-w-[calc(100vw-2rem)] flex-col items-end gap-2 [&>div]:max-w-full">
         <ToastHost />
       </div>
     </TipProvider>

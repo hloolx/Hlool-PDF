@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ImagePlus, Pencil, Sparkles, Trash2, X } from 'lucide-react'
-import { getJSON } from '../../lib/api'
+import { Check, Eraser, ImagePlus, Loader2, Pencil, Trash2, X } from 'lucide-react'
 import { cx } from '../../lib/cx'
 import type { StampAsset } from '../../lib/types'
 import { stampLabel, useEditorStore } from '../../state/store'
+import { toast } from '../../state/toasts'
 import { Button, ConfirmButton, IconButton } from '../../ui/Button'
 import { Field, NumberField, TextInput } from '../../ui/Field'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/Popover'
@@ -13,64 +13,29 @@ import { useGhost } from '../placements/ghost'
 import { placeAtClientPoint } from '../placements/actions'
 import { deleteStampAction, deleteStampsAction, replaceStampImage, uploadStamps } from '../workspace/actions'
 import { MattingDialog } from './MattingDialog'
+import { getStampBlob } from '../library/storage'
 
 const SELECT_THRESHOLD = 5
 
 type SelectBox = { left: number; top: number; width: number; height: number }
 type SelectPress = { startX: number; startY: number; active: boolean }
 
-/* ---- 库配额（实例级常量，取一次缓存整个会话） ---- */
-
-type QuotaLimits = { maxStamps: number; maxLibraryBytes: number }
-
-let quotaLimitsCache: QuotaLimits | null = null
-
-function useQuotaLimits(): QuotaLimits | null {
-  const [limits, setLimits] = useState<QuotaLimits | null>(quotaLimitsCache)
-  useEffect(() => {
-    if (quotaLimitsCache) return
-    let cancelled = false
-    getJSON<QuotaLimits>('/api/stamps/quota')
-      .then((quota) => {
-        quotaLimitsCache = { maxStamps: quota.maxStamps, maxLibraryBytes: quota.maxLibraryBytes }
-        if (!cancelled) setLimits(quotaLimitsCache)
-      })
-      .catch(() => {
-        /* 取不到配额只是不显示容量条，不打扰使用 */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-  return limits
-}
-
-function formatMB(bytes: number): string {
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`
   const mb = bytes / (1024 * 1024)
-  if (mb >= 10) return String(Math.round(mb))
-  return (Math.round(mb * 10) / 10).toString()
+  return `${mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10} MB`
 }
 
-/** 印章架顶部的用量行：N/上限 + 容量条（后端有硬配额，这里让人提前看到而不是撞墙）。 */
-function QuotaBar({ stamps }: { stamps: StampAsset[] }) {
-  const limits = useQuotaLimits()
-  if (!limits || stamps.length === 0) return null
+function LocalUsage({ stamps }: { stamps: StampAsset[] }) {
   const usedBytes = stamps.reduce((sum, stamp) => sum + (stamp.size ?? 0), 0)
-  const ratio = Math.max(stamps.length / limits.maxStamps, usedBytes / limits.maxLibraryBytes)
-  const nearFull = ratio >= 0.9
   return (
     <div className="px-3 pt-1.5">
       <div className="flex items-center justify-between text-[11px] text-ink-muted">
-        <span>库用量</span>
-        <span className={cx('tnum', nearFull && 'font-medium text-accent')}>
-          {stamps.length}/{limits.maxStamps} 个 · {formatMB(usedBytes)}/{formatMB(limits.maxLibraryBytes)} MB
+        <span>当前浏览器</span>
+        <span className="tnum">
+          {stamps.length} 个 · {formatSize(usedBytes)}
         </span>
-      </div>
-      <div className="mt-1 h-1 overflow-hidden rounded-full bg-sunken">
-        <div
-          className={cx('h-full rounded-full transition-[width] duration-300', nearFull ? 'bg-accent' : 'bg-ink-muted/40')}
-          style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }}
-        />
       </div>
     </div>
   )
@@ -104,6 +69,9 @@ export function StampShelf() {
 
   function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return
+    // Radix 弹窗/浮层经 portal 挂到 body，但 React 事件仍冒泡回印章架；
+    // 仅在架内框选，避免捕获弹窗按钮的指针后将它误判为外部点击。
+    if (!event.currentTarget.contains(event.target as Node)) return
     if ((event.target as HTMLElement).closest('[data-shelf-item]')) return
     event.currentTarget.setPointerCapture(event.pointerId)
     press.current = { startX: event.clientX, startY: event.clientY, active: false }
@@ -128,7 +96,7 @@ export function StampShelf() {
   function finishSelection(event: React.PointerEvent<HTMLDivElement>) {
     const state = press.current
     press.current = null
-    event.currentTarget.releasePointerCapture?.(event.pointerId)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
     setSelectBox(null)
     if (state && !state.active && useEditorStore.getState().selectedStampIds.length > 0) clearBulkSelection()
   }
@@ -139,7 +107,7 @@ export function StampShelf() {
         <SectionTitle>印章架</SectionTitle>
         {stamps.length > 0 && <span className="text-[11px] text-ink-muted">拖到页面盖章</span>}
       </div>
-      <QuotaBar stamps={stamps} />
+      <LocalUsage stamps={stamps} />
       <div
         className={cx('scroll-slim grid max-h-[280px] grid-cols-2 gap-2 overflow-y-auto p-3', selectedIds.length > 0 && 'pb-14')}
         onPointerDown={onPointerDown}
@@ -234,6 +202,12 @@ function ShelfItem({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onClick={(event) => {
+          // 键盘激活不会触发 pointerup，需显式进入连续盖章模式。
+          if (event.detail !== 0) return
+          const editor = useEditorStore.getState()
+          editor.arm(editor.armedStampId === stamp.stampId ? null : stamp.stampId)
+        }}
         onPointerCancel={() => {
           pressed.current = null
           useGhost.getState().endDrag()
@@ -254,7 +228,7 @@ function ShelfItem({
       <div className="mt-1 truncate text-center text-[11px] text-ink-muted" title={alias}>
         {alias}
       </div>
-      <div className="absolute right-1 top-1 hidden gap-0.5 group-hover:flex">
+      <div className="absolute right-1 top-1 flex gap-0.5 opacity-100 focus-within:opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
         <StampEditPopover stamp={stamp} />
         <MattingButton stamp={stamp} />
         <ConfirmButton
@@ -334,17 +308,20 @@ function StampEditPopover({ stamp }: { stamp: StampAsset }) {
   const meta = useEditorStore((state) => state.stampMeta[stamp.stampId])
   const defaults = useEditorStore((state) => state.stampDefaults)
   const setStampMeta = useEditorStore((state) => state.setStampMeta)
+  const busy = useEditorStore((state) => Boolean(state.busy))
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <IconButton size="sm" className="bg-panel/95 shadow-sm" title="别名与默认尺寸">
+        <IconButton disabled={busy} size="sm" className="bg-panel/95 shadow-sm" title="别名与默认尺寸">
           <Pencil size={15} />
         </IconButton>
       </PopoverTrigger>
       <PopoverContent align="start" className="grid w-56 gap-3">
         <Field label="显示名称">
           <TextInput
-            defaultValue={meta?.alias ?? ''}
+            maxLength={500}
+            disabled={busy}
+            value={meta?.alias ?? ''}
             placeholder={stamp.name}
             onChange={(event) => setStampMeta(stamp.stampId, { alias: event.currentTarget.value || undefined })}
           />
@@ -355,6 +332,7 @@ function StampEditPopover({ stamp }: { stamp: StampAsset }) {
             min={5}
             max={150}
             unit="mm"
+            disabled={busy}
             onChange={(sizeMm) => setStampMeta(stamp.stampId, { sizeMm })}
           />
         </Field>
@@ -364,43 +342,69 @@ function StampEditPopover({ stamp }: { stamp: StampAsset }) {
 }
 
 function MattingButton({ stamp }: { stamp: StampAsset }) {
+  const busy = useEditorStore((state) => Boolean(state.busy))
+  const openingRef = useRef(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const mountedRef = useRef(true)
+  const [opening, setOpening] = useState(false)
   const [open, setOpen] = useState(false)
-  const [originalFile, setOriginalFile] = useState<File | null>(null)
+  const [original, setOriginal] = useState<{ file: File; url: string; digest: string } | null>(null)
+
+  useEffect(() => () => { if (original) URL.revokeObjectURL(original.url) }, [original])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   async function handleOpen() {
+    if (openingRef.current || useEditorStore.getState().busy) return
+    openingRef.current = true
+    setOpening(true)
     try {
-      const response = await fetch(stamp.url)
-      const blob = await response.blob()
+      const blob = await getStampBlob(stamp.stampId)
       const file = new File([blob], stamp.name, { type: blob.type })
-      setOriginalFile(file)
+      const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))
+      const digest = Array.from(hash, (byte) => byte.toString(16).padStart(2, '0')).join('')
+      if (!mountedRef.current) return
+      setOriginal({ file, digest, url: URL.createObjectURL(blob) })
       setOpen(true)
     } catch {
-      // Ignore
+      if (mountedRef.current) toast('无法读取本地印章，请重新导入图片后重试。', { kind: 'error' })
+    } finally {
+      openingRef.current = false
+      if (mountedRef.current) setOpening(false)
     }
   }
 
   async function handleAccept(blob: Blob, saveAsNew: boolean) {
-    const file = new File([blob], stamp.name.replace(/\.[^.]+$/, '') + '-透明.png', { type: 'image/png' })
+    if (!original) return false
+    const file = new File([blob], original.file.name.replace(/\.[^.]+$/, '') + '-透明.png', { type: 'image/png' })
     if (saveAsNew) {
-      await uploadStamps([file])
+      const imported = await uploadStamps([file])
+      return imported.length > 0
     } else {
       // 原位替换：新章顶替旧章的所有引用（已放置的章与骑缝配置保留）。
       // 不能先删后传：removeStamp 会级联清掉页面上的 placements。
-      await replaceStampImage(stamp, file, file.name)
+      return replaceStampImage(stamp, file, file.name, original.digest)
     }
   }
 
   return (
     <>
-      <IconButton size="sm" className="bg-panel/95 shadow-sm" title="AI 背景移除" onClick={handleOpen}>
-        <Sparkles size={15} />
+      <IconButton ref={triggerRef} disabled={busy || opening} size="sm" className="bg-panel/95 shadow-sm" title="本地白底透明化" aria-label="本地白底透明化" onClick={handleOpen}>
+        {opening ? <Loader2 size={15} className="animate-spin" /> : <Eraser size={15} />}
       </IconButton>
-      {originalFile && (
+      {original && (
         <MattingDialog
           open={open}
-          onClose={() => setOpen(false)}
-          originalFile={originalFile}
-          originalUrl={stamp.url}
+          onClose={() => {
+            setOpen(false)
+            setOriginal(null)
+            requestAnimationFrame(() => triggerRef.current?.focus())
+          }}
+          originalFile={original.file}
+          originalUrl={original.url}
           onAccept={handleAccept}
         />
       )}
@@ -410,13 +414,15 @@ function MattingButton({ stamp }: { stamp: StampAsset }) {
 
 function ImportTile({ compact }: { compact: boolean }) {
   const [hover, setHover] = useState(false)
+  const busy = useEditorStore((state) => Boolean(state.busy))
   return (
     <label
       data-shelf-item
       className={cx(
-        'flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed text-ink-muted transition-colors',
+        'flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed text-ink-muted transition-colors focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent/60',
         compact ? 'aspect-square' : 'col-span-2 py-6',
-        hover ? 'border-accent text-accent' : 'border-line hover:border-ink-muted/60'
+        hover ? 'border-accent text-accent' : 'border-line hover:border-ink-muted/60',
+        busy && 'cursor-wait opacity-50'
       )}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -427,7 +433,9 @@ function ImportTile({ compact }: { compact: boolean }) {
         type="file"
         accept="image/png,image/jpeg,image/webp"
         multiple
-        className="hidden"
+        className="sr-only"
+        aria-label="导入印章"
+        disabled={busy}
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? [])
           event.currentTarget.value = ''

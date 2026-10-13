@@ -1,0 +1,11 @@
+{
+  "name": "hlool pdf · 本地 PDF 工作台",
+  "short_name": "hlool pdf",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f2ef",
+  "theme_color": "#c8372d",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

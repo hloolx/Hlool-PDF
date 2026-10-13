@@ -1,8 +1,8 @@
 /**
- * 本地引擎对齐 harness（LOCAL_FIRST.md P1-1 盖章 + P2 页面操作/加密）。
+ * 可选的浏览器引擎与 Go 参考引擎对比（不属于应用构建依赖）。
  *
  * 同一夹具与参数分别过：
- *   服务器引擎  go run ./cmd/refstamp（直调 internal/pdf 的 StampPDF / ComposePDF+
+ *   Go 参考引擎 go run ./cmd/refstamp（直调 internal/pdf 的 StampPDF / ComposePDF+
  *               RotatePagesBaked / ImageToPDF / DecryptPDF，绕过 HTTP/鉴权）
  *   本地引擎    web/src/features/generate/{localEngine,localCompose,qpdf}.ts
  *               （Playwright Chromium 里跑真码）
@@ -30,7 +30,7 @@ const PW = 'hlool-测试密码-42'
 
 /* ---------------- 用例矩阵 ----------------
  * kind: 'stamp'（缺省）| 'compose' | 'image'；red=false 是已知怪癖的信息化记录。
- * stamp 参数与 /api/process、compose 参数与 /api/compose 完全同形。
+ * 参数沿用原参考引擎模型，测试过程不需要应用 API。
  */
 const seam = (over) => ({
   stampId: 'square',
@@ -258,7 +258,7 @@ await runUnitTests()
 await bundleHarness()
 
 const { server, port } = await serve()
-const browser = await chromium.launch()
+const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || undefined })
 const page = await browser.newPage()
 page.setDefaultTimeout(120_000)
 page.on('pageerror', (err) => console.error('[page error]', err.message))

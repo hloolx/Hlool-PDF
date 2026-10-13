@@ -1,20 +1,20 @@
-import { ApiError, errorText } from '../../lib/api'
 import type { FileConfig, PDFFile } from '../../lib/types'
 import { emptyConfig } from '../../lib/types'
 import { normalizePageExpr, pagesToExpression, parsePageExpression } from '../../lib/pages'
 import { switchFile, useEditorStore } from '../../state/store'
 import { toast } from '../../state/toasts'
+import { beginOperation } from '../../state/operations'
 import { composePdf, rebuildFile, type ComposePageRef } from '../workspace/actions'
 import { rotatePlacementOnPage } from '../placements/actions'
-import { requireReauth } from '../auth/useAuth'
+import { localProcessingError } from '../generate/localSafety'
 
 /** 一个输出页：来自当前文件的 src 旧页码，按 rotate（顺时针度数，0/90/180/270）旋转。 */
 export type OutPage = { src: number; rotate?: number }
 
 /** 把显式页码表达式按 old→new 重映射；不在 mapTo 中的页（被删除）丢弃；“全部 / all”原样保留。 */
-function remapExpression(expr: string, mapTo: Map<number, number>, newPageCount: number): string {
+function remapExpression(expr: string, mapTo: Map<number, number>, newPageCount: number, oldPageCount: number): string {
   if (normalizePageExpr(expr) === 'all') return expr
-  const parsed = parsePageExpression(expr, Number.MAX_SAFE_INTEGER)
+  const parsed = parsePageExpression(expr, oldPageCount)
   const mapped = parsed.pages.flatMap((page) => {
     const next = mapTo.get(page)
     return next ? [next] : []
@@ -31,8 +31,23 @@ type Snapshot = {
   wasActive: boolean
 }
 
+/** Old page coordinates cannot be replayed onto new bytes; retain unrelated file history. */
+function rebaseFileHistory(fileId: string, config: FileConfig | undefined) {
+  const history = useEditorStore.temporal.getState()
+  const rebase = (entry: { configs?: Record<string, FileConfig> }) => {
+    const configs = { ...entry.configs }
+    if (config) configs[fileId] = config
+    else delete configs[fileId]
+    return { ...entry, configs }
+  }
+  useEditorStore.temporal.setState({
+    pastStates: history.pastStates.map(rebase),
+    futureStates: history.futureStates.map(rebase)
+  })
+}
+
 /**
- * 按一组输出页就地重建当前文件（重排 / 删除 / 旋转的统一底座）：用服务端无状态
+ * 按一组输出页就地重建当前文件（重排 / 删除 / 旋转的统一底座）：用浏览器本地
  * 合成生成新字节并原位替换（fileId 不变），所有跟随旧页码的状态迁移到新页码——
  * 印章 placements（旋转页上的随纸张一起变换坐标）、骑缝章页面范围、目标页范围、当前页码。
  * 返回是否成功及一个 restore（把文件与配置还原到操作前，供“撤销”用）。
@@ -43,6 +58,10 @@ async function recompose(
   busy: string
 ): Promise<{ ok: boolean; restore: () => void }> {
   const before = useEditorStore.getState()
+  const operation = beginOperation(busy)
+  if (!operation) return { ok: false, restore: () => {} }
+  let committedFile: PDFFile | undefined
+  let committedConfig: FileConfig | undefined
   const snapshot: Snapshot = {
     file,
     config: before.configs[file.fileId],
@@ -52,18 +71,25 @@ async function recompose(
   }
   const restore = () => {
     const state = useEditorStore.getState()
+    if (state.busy || !committedFile || state.files.find((item) => item.fileId === file.fileId)?.blob !== committedFile.blob
+      || state.configs[file.fileId] !== committedConfig) {
+      toast('文件已有后续编辑，无法撤销这次页面操作。', { kind: 'error' })
+      return
+    }
     state.replaceFile(snapshot.file)
     state.setConfig(snapshot.file.fileId, snapshot.config ?? emptyConfig())
-    if (snapshot.wasActive) {
+    if (state.activeFileId === file.fileId && snapshot.wasActive) {
       state.setRangeText(snapshot.rangeText)
       state.setCurrentPage(Math.min(snapshot.currentPage, snapshot.file.pageCount))
     }
-    useEditorStore.temporal.getState().clear()
+    rebaseFileHistory(file.fileId, useEditorStore.getState().configs[file.fileId])
     toast(`已撤销 · ${snapshot.file.name}`)
   }
 
-  useEditorStore.getState().setBusy(busy)
   try {
+    if (before.files.find((item) => item.fileId === file.fileId)?.blob !== file.blob) {
+      throw new Error('原文件已被修改或移除，请在最新文件上重新操作。')
+    }
     const refs: ComposePageRef[] = outPages.map((o) => ({ file: 0, pageNumber: o.src, rotate: o.rotate ?? 0 }))
     const composed = await composePdf([file.blob], refs, file.name, file.password)
     const updated = await rebuildFile(file.fileId, file.name, composed)
@@ -79,7 +105,15 @@ async function recompose(
     const oldPageByNumber = new Map(file.pages.map((p) => [p.pageNumber, p]))
 
     const state = useEditorStore.getState()
+    if (state.files.find((item) => item.fileId === file.fileId)?.blob !== file.blob) {
+      throw new Error('处理期间原文件已被修改或移除，本次页面操作已停止。')
+    }
     const config = state.configs[file.fileId]
+    // Edits made while processing still refer to the old pages and can be migrated safely.
+    snapshot.config = config
+    snapshot.wasActive = state.activeFileId === file.fileId
+    snapshot.currentPage = state.currentPage
+    snapshot.rangeText = state.rangeText
     if (config) {
       state.setConfig(file.fileId, {
         ...config,
@@ -91,31 +125,36 @@ async function recompose(
           const moved = deg && oldPage ? rotatePlacementOnPage(placement, oldPage, deg) : placement
           return [{ ...moved, pageNumber: newPage }]
         }),
-        seam: { ...config.seam, pages: remapExpression(config.seam.pages, mapTo, newCount) }
+        seam: { ...config.seam, pages: remapExpression(config.seam.pages, mapTo, newCount, file.pageCount) }
       })
     }
     if (snapshot.wasActive) {
-      state.setRangeText(remapExpression(state.rangeText, mapTo, newCount))
+      state.setRangeText(remapExpression(state.rangeText, mapTo, newCount, file.pageCount))
       const mappedCurrent = mapTo.get(state.currentPage)
       state.replaceFile(updated)
       state.setCurrentPage(mappedCurrent ?? Math.min(state.currentPage, updated.pageCount))
     } else {
       state.replaceFile(updated)
     }
-    useEditorStore.temporal.getState().clear()
+    committedFile = updated
+    committedConfig = useEditorStore.getState().configs[file.fileId]
+    rebaseFileHistory(file.fileId, committedConfig)
     return { ok: true, restore }
   } catch (err) {
-    // 与生成/上传流程一致：会话失效不只弹提示，还要退回登录页。
-    if (err instanceof ApiError && err.status === 401) requireReauth()
-    else toast(errorText(err), { kind: 'error' })
+    toast(localProcessingError(err).message, { kind: 'error' })
     return { ok: false, restore }
   } finally {
-    useEditorStore.getState().setBusy('')
+    operation.end()
   }
 }
 
 /** 按新顺序重排当前文件（order 为按显示顺序排列的旧页码）。用于缩略图拖拽，无提示。 */
 export async function reorderPages(file: PDFFile, order: number[]): Promise<boolean> {
+  if (order.length !== file.pageCount || new Set(order).size !== file.pageCount
+    || order.some((page) => !Number.isInteger(page) || page < 1 || page > file.pageCount)) {
+    toast('页面顺序无效，请刷新缩略图后重试。', { kind: 'error' })
+    return false
+  }
   const { ok } = await recompose(file, order.map((src) => ({ src })), '正在调整页序…')
   return ok
 }
@@ -125,6 +164,11 @@ export async function reorderPages(file: PDFFile, order: number[]): Promise<bool
  * 否则就地重排去掉该页。两者都给“撤销”提示。
  */
 export async function deletePage(file: PDFFile, pageNumber: number): Promise<void> {
+  if (useEditorStore.getState().busy) { toast('请等待当前操作完成后再试。'); return }
+  if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > file.pageCount) return
+  if (useEditorStore.getState().files.find((item) => item.fileId === file.fileId)?.blob !== file.blob) {
+    toast('原文件已被修改或移除，请在最新文件上重新操作。', { kind: 'error' }); return
+  }
   if (file.pageCount <= 1) {
     const state = useEditorStore.getState()
     const wasActive = state.activeFileId === file.fileId
@@ -150,7 +194,11 @@ export async function deletePage(file: PDFFile, pageNumber: number): Promise<voi
 
 /** 一次性删除当前文件的多页。批量场景必须一次 recompose，避免页码连续重映射。 */
 export async function deletePages(file: PDFFile, pageNumbers: number[]): Promise<void> {
-  const selected = new Set(pageNumbers.filter((page) => page >= 1 && page <= file.pageCount))
+  if (useEditorStore.getState().busy) { toast('请等待当前操作完成后再试。'); return }
+  if (useEditorStore.getState().files.find((item) => item.fileId === file.fileId)?.blob !== file.blob) {
+    toast('原文件已被修改或移除，请在最新文件上重新操作。', { kind: 'error' }); return
+  }
+  const selected = new Set(pageNumbers.filter((page) => Number.isInteger(page) && page >= 1 && page <= file.pageCount))
   if (selected.size === 0) return
   if (selected.size >= file.pageCount) {
     const state = useEditorStore.getState()
@@ -177,6 +225,11 @@ export async function deletePages(file: PDFFile, pageNumbers: number[]): Promise
 
 /** 把当前文件的某一页顺时针旋转 deg（90 的倍数，可为负），其余页保持不变。 */
 export async function rotatePage(file: PDFFile, pageNumber: number, deg: number): Promise<void> {
+  if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > file.pageCount) return
+  if (!Number.isFinite(deg) || deg % 90 !== 0) {
+    toast('旋转角必须是 90 的倍数。', { kind: 'error' })
+    return
+  }
   const order: OutPage[] = file.pages.map((p) => ({
     src: p.pageNumber,
     rotate: p.pageNumber === pageNumber ? deg : 0

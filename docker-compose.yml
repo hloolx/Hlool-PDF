@@ -1,34 +1,8 @@
-# hlool-pdf 部署编排：直接拉取 GitHub Actions 发布的现成镜像，服务器上无需构建。
-# 用法一（宝塔）：面板 → Docker → 编排（Compose）→ 添加编排，整段粘贴后启动。
-# 用法二（命令行）：在本目录执行  docker compose up -d
-#
-# 更新到新版本（数据不丢）：
-#   docker pull ghcr.io/hloolx/hlool-pdf:latest
-#   docker rm -f hlool-pdf
-#   然后重新启动本编排（宝塔点「启动」，命令行 docker compose up -d）。
+# Serves the browser application. User files and stamp libraries stay in browsers.
 services:
   hlool-pdf:
-    image: ghcr.io/hloolx/hlool-pdf:latest
-    container_name: hlool-pdf
+    build: .
+    image: hlool-pdf-browser:local
     restart: unless-stopped
     ports:
-      # 直接用 http://服务器IP:8080 访问。以后改用宝塔网站反代 + 域名时，
-      # 建议改成 "127.0.0.1:8080:8080"，只让本机的反代访问。
-      - "8080:8080"
-    environment:
-      # 公网部署建议关游客（管理员后台随时可再开）。
-      HLOOL_ALLOW_GUEST: "0"
-      # 绑定域名后再收紧 Host 白名单，防 DNS rebinding：
-      # HLOOL_ALLOWED_HOSTS: pdf.example.com
-      # 前面有 HTTPS 反向代理（宝塔网站反代）时设为 1：
-      # HLOOL_BEHIND_PROXY: "1"
-      # 小内存服务器建议限制并发重任务数（默认=CPU 核数）：
-      # HLOOL_MAX_CONCURRENT_JOBS: "2"
-    volumes:
-      # 数据（用户库 SQLite + 印章 + 设置）都在这个命名卷里，更新/重建容器不丢。
-      # 容器以非 root（uid 10001）运行；如要换成宿主机目录，需先对该目录
-      # chown -R 10001:10001，否则起不来。
-      - hlool-data:/data
-
-volumes:
-  hlool-data:
+      - "127.0.0.1:8080:8080"

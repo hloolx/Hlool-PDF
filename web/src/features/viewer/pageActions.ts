@@ -1,34 +1,54 @@
-import { ApiError, errorText } from '../../lib/api'
 import { downloadBlob } from '../../lib/download'
 import type { PDFDocumentProxy } from '../../lib/pdfjs'
 import { parsePageExpression } from '../../lib/pages'
 import type { FileConfig, PDFFile, PageInfo, Placement, StampAsset } from '../../lib/types'
-import { activeConfig, useEditorStore, type EditorState } from '../../state/store'
+import { emptyConfig } from '../../lib/types'
+import { useEditorStore, type EditorState } from '../../state/store'
 import { toast } from '../../state/toasts'
+import { beginOperation } from '../../state/operations'
 import { composePdf } from '../workspace/actions'
 import { processDetachedPdf } from '../generate/actions'
-import { requireReauth } from '../auth/useAuth'
+import { localProcessingError } from '../generate/localSafety'
 import { seamCrop, seamRectPt } from '../seam/slices'
-import { loadImage } from './imageCache'
+import { readStampAssets } from '../library/storage'
 
 const MAX_SNAPSHOT_EDGE = 4096
 const SNAPSHOT_SCALE = 2.5
 
 type OverlaySnapshot = {
   config: FileConfig
-  stamps: StampAsset[]
+  stamps: Pick<StampAsset, 'stampId' | 'widthPx' | 'heightPx'>[]
+  assets: Awaited<ReturnType<typeof readStampAssets>>
+  images: Map<string, ImageBitmap>
 }
 
-function overlaySnapshot(state: EditorState = useEditorStore.getState()): OverlaySnapshot {
-  const config = activeConfig(state)
+async function overlaySnapshot(file: PDFFile, pageNumber: number, state: EditorState): Promise<OverlaySnapshot> {
+  const source = state.configs[file.fileId] ?? emptyConfig()
+  const config = { ...source, placements: source.placements.filter((p) => p.pageNumber === pageNumber).map((p) => ({ ...p })), seam: { ...source.seam } }
+  const assets = await readStampAssets([
+    ...config.placements.map((p) => p.stampId),
+    ...(config.seamEnabled && config.seam.stampId ? [config.seam.stampId] : [])
+  ])
   return {
-    config: {
-      placements: [...config.placements],
-      seamEnabled: config.seamEnabled,
-      seam: { ...config.seam }
-    },
-    stamps: [...state.stamps]
+    config,
+    assets,
+    images: new Map(),
+    stamps: Object.entries(assets).map(([stampId, asset]) => ({ stampId, widthPx: asset.widthPx, heightPx: asset.heightPx }))
   }
+}
+
+async function snapshotImage(snapshot: OverlaySnapshot, stampId: string): Promise<ImageBitmap> {
+  const existing = snapshot.images.get(stampId)
+  if (existing) return existing
+  const asset = snapshot.assets[stampId]
+  if (!asset) throw new Error('印章图片已不可用，请重新选择印章。')
+  const bitmap = await createImageBitmap(asset.blob)
+  snapshot.images.set(stampId, bitmap)
+  return bitmap
+}
+
+function releaseSnapshot(snapshot?: OverlaySnapshot) {
+  for (const image of snapshot?.images.values() ?? []) image.close()
 }
 
 function baseName(name: string) {
@@ -42,7 +62,7 @@ function pageFileName(file: PDFFile, pageNumber: number, ext: 'pdf' | 'png') {
 function snapshotScale(pageInfo: PageInfo) {
   const maxEdge = Math.max(pageInfo.widthPt, pageInfo.heightPt)
   if (!Number.isFinite(maxEdge) || maxEdge <= 0) return 1
-  return Math.max(0.5, Math.min(SNAPSHOT_SCALE, MAX_SNAPSHOT_EDGE / maxEdge))
+  return Math.min(SNAPSHOT_SCALE, MAX_SNAPSHOT_EDGE / maxEdge)
 }
 
 function canvasBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob> {
@@ -75,8 +95,8 @@ async function drawPlacement(
   scale: number
 ) {
   const stamp = snapshot.stamps.find((item) => item.stampId === placement.stampId)
-  if (!stamp) return
-  const img = await loadImage(stamp.url)
+  if (!stamp) throw new Error('引用的印章已不可用，请重新选择。')
+  const img = await snapshotImage(snapshot, stamp.stampId)
   const x = placement.xPt * scale
   const top = (pageInfo.heightPt - placement.yPt - placement.heightPt) * scale
   const width = placement.widthPt * scale
@@ -103,7 +123,7 @@ async function drawPageOverlays(
 
   const seam = seamVisualForPage(file, pageInfo.pageNumber, snapshot)
   if (!seam) return
-  const img = await loadImage(seam.stamp.url)
+  const img = await snapshotImage(snapshot, seam.stamp.stampId)
   const crop = seamCrop(
     seam.stamp.widthPx,
     seam.stamp.heightPx,
@@ -141,9 +161,14 @@ async function renderPageSnapshot(doc: PDFDocumentProxy, file: PDFFile, pageInfo
   if (!context) throw new Error('无法创建画布')
   context.fillStyle = '#fff'
   context.fillRect(0, 0, canvas.width, canvas.height)
-  await page.render({ canvas, canvasContext: context, viewport }).promise
-  await drawPageOverlays(context, file, pageInfo, scale, snapshot)
-  return canvas
+  try {
+    await page.render({ canvas, canvasContext: context, viewport }).promise
+    await drawPageOverlays(context, file, pageInfo, scale, snapshot)
+    return canvas
+  } catch (error) {
+    canvas.width = canvas.height = 0
+    throw error
+  }
 }
 
 async function writePngToClipboard(blob: Blob) {
@@ -209,13 +234,14 @@ async function rasterPdfFromCanvas(canvas: HTMLCanvasElement, pageInfo: PageInfo
   return makeJpegPdf(jpeg, canvas.width, canvas.height, pageInfo.widthPt, pageInfo.heightPt)
 }
 
-/** 单页盖章/加密：本地优先（processDetachedPdf 内部含云端回退），页码已重映射到 1。 */
-async function processOnePagePdf(blob: Blob, name: string, placements: Placement[], outputPassword: string) {
+/** 单页盖章/加密完全在浏览器完成，页码已重映射到 1。 */
+async function processOnePagePdf(blob: Blob, name: string, placements: Placement[], state: EditorState, snapshot: OverlaySnapshot) {
   return processDetachedPdf(
     blob,
     placements.map((placement) => placementPayload(placement, 1)),
-    outputPassword,
-    name
+    state.outputPassword,
+    name,
+    { state, assets: snapshot.assets }
   )
 }
 
@@ -225,10 +251,14 @@ export async function copyPageAsPng(doc: PDFDocumentProxy | null, file: PDFFile,
     return
   }
   const name = pageFileName(file, pageInfo.pageNumber, 'png')
-  useEditorStore.getState().setBusy(`正在复制第 ${pageInfo.pageNumber} 页…`)
+  const state = useEditorStore.getState()
+  const operation = beginOperation(`正在复制第 ${pageInfo.pageNumber} 页…`)
+  if (!operation) return
+  let snapshot: OverlaySnapshot | undefined
+  let canvas: HTMLCanvasElement | undefined
   try {
-    const snapshot = overlaySnapshot()
-    const canvas = await renderPageSnapshot(doc, file, pageInfo, snapshot)
+    snapshot = await overlaySnapshot(file, pageInfo.pageNumber, state)
+    canvas = await renderPageSnapshot(doc, file, pageInfo, snapshot)
     const blob = await canvasBlob(canvas, 'image/png')
     try {
       await writePngToClipboard(blob)
@@ -238,39 +268,45 @@ export async function copyPageAsPng(doc: PDFDocumentProxy | null, file: PDFFile,
       toast('浏览器限制写入剪贴板，已改为下载 PNG。', { kind: 'error' })
     }
   } catch (err) {
-    toast(errorText(err), { kind: 'error' })
+    toast(localProcessingError(err).message, { kind: 'error' })
   } finally {
-    useEditorStore.getState().setBusy('')
+    if (canvas) canvas.width = canvas.height = 0
+    releaseSnapshot(snapshot)
+    operation.end()
   }
 }
 
 export async function exportPagePdf(doc: PDFDocumentProxy | null, file: PDFFile, pageInfo: PageInfo) {
   const state = useEditorStore.getState()
-  const snapshot = overlaySnapshot(state)
   const name = pageFileName(file, pageInfo.pageNumber, 'pdf')
-  const placements = snapshot.config.placements.filter((placement) => placement.pageNumber === pageInfo.pageNumber)
-  const hasSeamVisual = Boolean(seamVisualForPage(file, pageInfo.pageNumber, snapshot))
-  useEditorStore.getState().setBusy(`正在导出第 ${pageInfo.pageNumber} 页…`)
+  const operation = beginOperation(`正在导出第 ${pageInfo.pageNumber} 页…`)
+  if (!operation) return
+  let snapshot: OverlaySnapshot | undefined
+  let canvas: HTMLCanvasElement | undefined
   try {
+    snapshot = await overlaySnapshot(file, pageInfo.pageNumber, state)
+    const placements = snapshot.config.placements
+    const hasSeamVisual = Boolean(seamVisualForPage(file, pageInfo.pageNumber, snapshot))
     let output: Blob
     if (hasSeamVisual) {
       if (!doc) throw new Error('页面还在加载，稍后再导出。')
-      const canvas = await renderPageSnapshot(doc, file, pageInfo, snapshot)
+      canvas = await renderPageSnapshot(doc, file, pageInfo, snapshot)
       output = await rasterPdfFromCanvas(canvas, pageInfo)
-      if (state.outputPassword) output = await processOnePagePdf(output, name, [], state.outputPassword)
+      if (state.outputPassword) output = await processOnePagePdf(output, name, [], state, snapshot)
     } else {
       const onePage = await composePdf([file.blob], [{ file: 0, pageNumber: pageInfo.pageNumber }], name, file.password)
       output =
         placements.length > 0 || state.outputPassword
-          ? await processOnePagePdf(onePage, name, placements, state.outputPassword)
+          ? await processOnePagePdf(onePage, name, placements, state, snapshot)
           : onePage
     }
     downloadBlob(output, name)
     toast(`已导出第 ${pageInfo.pageNumber} 页 PDF`, { kind: 'success' })
   } catch (err) {
-    if (err instanceof ApiError && err.status === 401) requireReauth()
-    else toast(errorText(err), { kind: 'error' })
+    toast(localProcessingError(err).message, { kind: 'error' })
   } finally {
-    useEditorStore.getState().setBusy('')
+    if (canvas) canvas.width = canvas.height = 0
+    releaseSnapshot(snapshot)
+    operation.end()
   }
 }

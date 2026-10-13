@@ -7,7 +7,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "npm run test:unit && npm run test:browser",
+    "test:unit": "node scripts/test-unit.mjs",
+    "test:browser": "npm run build && playwright test"
   },
   "engines": {
     "node": ">=22.13.0",
@@ -20,7 +23,7 @@
     "jszip": "^3.10.1",
     "lucide-react": "^0.468.0",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^5.4.0",
+    "pdfjs-dist": "^6.4.299",
     "radix-ui": "^1.5.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -31,7 +34,12 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0"
+    "@types/react-dom": "^19.0.0",
+    "esbuild": "^0.25.12"
+  },
+  "overrides": {
+    "vite": { "esbuild": "^0.28.2" }
   }
 }

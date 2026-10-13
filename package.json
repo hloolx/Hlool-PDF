@@ -1,0 +1,12 @@
+{
+  "name": "hlool-pdf",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "preview": "npm --prefix web run preview -- --host 127.0.0.1",
+    "test": "npm --prefix web test",
+    "test:unit": "npm --prefix web run test:unit",
+    "test:browser": "npm --prefix web run test:browser"
+  }
+}

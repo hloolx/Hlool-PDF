@@ -2,7 +2,7 @@
   "name": "verify-local-engine",
   "private": true,
   "type": "module",
-  "description": "本地盖章引擎 ↔ 服务端 pdfcpu 引擎的像素级对齐 harness（LOCAL_FIRST.md P1）",
+  "description": "浏览器引擎 ↔ 可选 Go pdfcpu 参考引擎的像素级对比",
   "devDependencies": {
     "esbuild": "^0.25.0",
     "playwright": "1.61.1"

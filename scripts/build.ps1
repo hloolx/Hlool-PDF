@@ -1,32 +1,13 @@
-$ErrorActionPreference = "Stop"
-
-function Invoke-WithProxyRetry {
-    param(
-        [Parameter(Mandatory=$true)]
-        [scriptblock]$Command
-    )
-    try {
-        & $Command
-    } catch {
-        Write-Host "Direct network/build step failed; retrying via http://127.0.0.1:9000"
-        $env:HTTP_PROXY = "http://127.0.0.1:9000"
-        $env:HTTPS_PROXY = "http://127.0.0.1:9000"
-        & $Command
-    }
+$ErrorActionPreference = 'Stop'
+Set-Location (Split-Path -Parent $PSScriptRoot)
+npm --prefix web ci
+if ($LASTEXITCODE -ne 0) {
+    Write-Host 'Dependency download failed; retrying via http://127.0.0.1:9000'
+    $env:HTTP_PROXY = 'http://127.0.0.1:9000'
+    $env:HTTPS_PROXY = 'http://127.0.0.1:9000'
+    npm --prefix web ci --proxy http://127.0.0.1:9000
+    if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
 }
-
-$root = Split-Path -Parent $PSScriptRoot
-Set-Location $root
-
-Invoke-WithProxyRetry { npm --prefix web ci }
 npm --prefix web run build
-
-Invoke-WithProxyRetry { go test ./... }
-
-New-Item -ItemType Directory -Path dist -Force | Out-Null
-$env:CGO_ENABLED = "0"
-$env:GOOS = "windows"
-$env:GOARCH = "amd64"
-go build -tags embed -trimpath -ldflags "-s -w" -o dist\hlool-pdf.exe .\cmd\hlool-pdf
-
-Write-Host "Built dist\hlool-pdf.exe"
+if ($LASTEXITCODE -ne 0) { throw 'Browser build failed.' }
+Write-Host 'Built web/dist. Preview with npm run preview. Go is not required.'

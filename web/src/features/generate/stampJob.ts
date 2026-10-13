@@ -4,6 +4,7 @@
  * 保证两条路径行为完全一致。
  */
 import type { StampJobInput } from './actions'
+import { isEncryptedPdfError } from './localSafety'
 
 export async function runStampJobInline(job: StampJobInput): Promise<Uint8Array> {
   let bytes: Uint8Array<ArrayBufferLike> = new Uint8Array(await job.pdf.arrayBuffer())
@@ -16,7 +17,15 @@ export async function runStampJobInline(job: StampJobInput): Promise<Uint8Array>
     stamps[id] = { bytes: await s.blob.arrayBuffer(), widthPx: s.widthPx, heightPx: s.heightPx }
   }
   const { stampPdfLocally } = await import('./localEngine')
-  let out = await stampPdfLocally(bytes, job.params, stamps)
+  let out: Uint8Array
+  try {
+    out = await stampPdfLocally(bytes, job.params, stamps)
+  } catch (error) {
+    // PDF.js 可直接预览空用户密码的加密 PDF，pdf-lib 仍需本地解锁。
+    if (!isEncryptedPdfError(error) || job.password) throw error
+    const { decryptPdf } = await import('./qpdf')
+    out = await stampPdfLocally(await decryptPdf(bytes, ''), job.params, stamps)
+  }
   if (job.outputPassword) {
     const { encryptPdf } = await import('./qpdf')
     out = await encryptPdf(out, job.outputPassword, job.outputOwnerPassword)

@@ -79,7 +79,7 @@ export type BakeSpec = {
  * 自带 /Rotate 源页的烘录变换，逐式复刻 pdfcpu 盖章时的「旋转内在化」
  * （pdfcpu stamp.go addPageWatermark + model.ContentBytesForPageRotation）：
  * 视口(CropBox) ±90 时宽高互换、MediaBox/CropBox 改写为新框、删 /Rotate、
- * 原内容包 R(−rot)+T 的 CTM。非 90 倍数返回 null（调用方回退云端）。
+ * 原内容包 R(−rot)+T 的 CTM。非 90 倍数返回 null（调用方说明错误）。
  */
 export function bakeRotationSpec(rotateDeg: number, crop: PageBox): BakeSpec | null {
   const rot = ((Math.round(rotateDeg) % 360) + 360) % 360

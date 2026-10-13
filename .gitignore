@@ -10,4 +10,9 @@ web/node_modules/
 hlool-pdf*.exe
 .gotmp/
 .run-logs/
+web/.test-work/
+web/test-results/
+web/playwright-report/
+scripts/verify-local-engine/node_modules/
+scripts/verify-local-engine/.work/
 CODEX_CC_ORCHESTRATOR_PROMPT.md

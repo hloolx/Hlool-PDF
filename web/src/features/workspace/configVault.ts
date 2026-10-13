@@ -17,7 +17,7 @@ function readVault(): Vault {
   try {
     const raw = window.localStorage.getItem(VAULT_KEY)
     const parsed = raw ? (JSON.parse(raw) as Vault) : {}
-    return parsed && typeof parsed === 'object' ? parsed : {}
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
   } catch {
     return {}
   }
@@ -25,6 +25,10 @@ function readVault(): Vault {
 
 function writeVault(vault: Vault) {
   const entries = Object.entries(vault).sort((a, b) => (b[1]?.savedAt ?? 0) - (a[1]?.savedAt ?? 0))
+  if (!entries.length) {
+    try { window.localStorage.removeItem(VAULT_KEY) } catch { /* Best-effort recovery cache. */ }
+    return
+  }
   // 超配额时按最近使用截半重试，最后放弃（防丢是尽力而为，不能打断正常使用）。
   for (let keep = Math.min(entries.length, MAX_ENTRIES); keep >= 1; keep = Math.floor(keep / 2)) {
     try {
@@ -74,20 +78,28 @@ export function startConfigVault() {
 /** 恢复出来的配置要过一遍现实校验：印章可能已删、页数可能对不上。 */
 function sanitizeRestored(saved: FileConfig, file: PDFFile, stampIds: Set<string>): FileConfig {
   const config = emptyConfig()
-  config.placements = (saved.placements ?? []).filter(
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return config
+  config.placements = (Array.isArray(saved.placements) ? saved.placements : []).filter(
     (p) =>
       p &&
-      stampIds.has(p.stampId) &&
+      typeof p.id === 'string' && stampIds.has(p.stampId) &&
       Number.isInteger(p.pageNumber) &&
       p.pageNumber >= 1 &&
       p.pageNumber <= file.pageCount &&
-      [p.xPt, p.yPt, p.widthPt, p.heightPt, p.rotation, p.opacity].every(Number.isFinite)
+      [p.xPt, p.yPt, p.widthPt, p.heightPt, p.rotation, p.opacity].every(Number.isFinite) &&
+      p.widthPt > 0 && p.heightPt > 0 && p.opacity > 0 && p.opacity <= 1
   )
   const seamStampId = saved.seam?.stampId && stampIds.has(saved.seam.stampId) ? saved.seam.stampId : null
-  config.seam = { ...DEFAULT_SEAM, ...(saved.seam ?? {}), stampId: seamStampId }
-  config.seamEnabled = Boolean(saved.seamEnabled && seamStampId)
-  config.scanEnabled = Boolean(saved.scanEnabled)
-  config.scanConfig = { ...DEFAULT_SCAN, ...(saved.scanConfig ?? {}) }
+  const seam = saved.seam
+  const validSeam = seam && typeof seam.pages === 'string' && seam.pages.length <= 4096 && ['left', 'right', 'top', 'bottom'].includes(seam.side) &&
+    [seam.sizePt, seam.positionPercent, seam.marginPt, seam.opacity, seam.maxSlices, seam.randomSeed].every(Number.isFinite)
+  config.seam = validSeam ? { ...DEFAULT_SEAM, ...seam, stampId: seamStampId } : { ...DEFAULT_SEAM }
+  config.seamEnabled = Boolean(saved.seamEnabled === true && seamStampId && validSeam)
+  const scan = saved.scanConfig
+  const validScan = scan && ['gray', 'sRGB'].includes(scan.colorspace) && ['image/png', 'image/jpeg'].includes(scan.outputFormat) &&
+    [scan.rotate, scan.rotateVariance, scan.blur, scan.noise, scan.scale, scan.brightness, scan.yellowish, scan.contrast].every(Number.isFinite)
+  config.scanEnabled = saved.scanEnabled === true
+  config.scanConfig = validScan ? { ...DEFAULT_SCAN, ...scan } : { ...DEFAULT_SCAN }
   return config
 }
 

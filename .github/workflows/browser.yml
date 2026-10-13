@@ -1,0 +1,72 @@
+name: Browser build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify browser application
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm --prefix web ci
+      - name: Install test browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Unit, browser and offline tests
+        run: npm --prefix web test
+      - name: Save static site
+        uses: actions/upload-artifact@v4
+        with:
+          name: hlool-pdf-web
+          path: web/dist/
+          if-no-files-found: error
+      - name: Save test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-results
+          path: web/test-results/
+          if-no-files-found: ignore
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: hlool-pdf-web
+          path: package/site
+      - name: Package static site
+        shell: bash
+        run: |
+          cp README.md DEPLOY.md LICENSE VERSION package/
+          mkdir release
+          (cd package && zip -9 -r ../release/hlool-pdf-web.zip .)
+          (cd release && sha256sum hlool-pdf-web.zip > checksums.txt)
+      - name: Publish tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/* --title "Hlool PDF $GITHUB_REF_NAME" --generate-notes
+          fi

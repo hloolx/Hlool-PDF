@@ -6,8 +6,8 @@ export type PageInfo = {
 }
 
 /**
- * 一个工作区文件。PDF 的真源是浏览器内存里的 blob（阅后即焚：服务器不留存），
- * 页面几何由 PDF.js 在导入时算出（与服务端 pdfcore.PageInfo 同为未旋转 pt）。
+ * 一个工作区文件。PDF 只存在于浏览器内存中的 blob，不上传、不自动持久化。
+ * 页面几何由 PDF.js 在导入时算出，单位为未旋转 pt。
  */
 export type PDFFile = {
   fileId: string
@@ -27,7 +27,7 @@ export type PDFFile = {
 export type StampAsset = {
   stampId: string
   name: string
-  /** 后端代理内容地址 /api/stamps/{id}/content（同源带 cookie）。 */
+  /** 当前页面创建的本地 Blob URL，不写入持久存储。 */
   url: string
   mime?: string
   /** 图片字节数（印章架容量条用；旧会话数据可能缺省）。 */
@@ -37,29 +37,7 @@ export type StampAsset = {
   createdAt: string
 }
 
-export type AuthUser = {
-  username: string
-  /** 临时身份（未注册）：可正常使用，但库会在约 24 小时后清除。 */
-  isGuest?: boolean
-  isAdmin?: boolean
-}
-
-export type AuthConfig = {
-  registerEnabled: boolean
-  inviteRequired: boolean
-  thirdPartyRegisterEnabled: boolean
-  guestEnabled: boolean
-  /** 管理员配置好 SMTP 后才为 true;缺省视为未开启,前端隐藏邮箱登录入口。 */
-  emailLoginEnabled?: boolean
-  /** 已配置且启用的 OAuth 提供方(github/google/linuxdo);缺省视为空。 */
-  oauthProviders?: string[]
-  /** 实例还没有管理员:登录页优先渲染首次安装向导。 */
-  needsInstall?: boolean
-  /** 远程访问初始化需输入启动日志里的一次性令牌;本机访问免输。 */
-  installTokenRequired?: boolean
-}
-
-/** 跟随账号、存到服务端 /api/settings 的用户库偏好（与设备无关的部分）。 */
+/** 与印章一同保存在本机 IndexedDB、可导入导出备份的偏好。 */
 export type LibrarySettings = {
   stampDefaults?: { sizeMm: number; opacity: number; rotation: number }
   stampMeta?: Record<string, { alias?: string; sizeMm?: number }>

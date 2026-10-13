@@ -27,8 +27,8 @@ export const MAX_PLACEMENTS_PER_JOB = 1000
 export const LEFT_DOCK_BP = 820
 export const RIGHT_DOCK_BP = 1024
 
-// Device-local cache (instant boot). The library subset also syncs to the
-// server (/api/settings) so it follows the account across devices.
+// Device-local cache for instant boot. Library settings are durably stored
+// in IndexedDB; PDFs and passwords never enter this cache.
 type PersistedState = {
   theme: 'light' | 'dark'
   zoomPreset: ZoomPreset
@@ -36,13 +36,11 @@ type PersistedState = {
   stampDefaults: StampDefaults
   stampMeta: Record<string, StampMeta>
   outputNameTemplate: string
-  /** 左侧（缩略图/印章架）面板是否展开。设备本地偏好，不同步服务端。 */
+  /** 左侧（缩略图/印章架）面板是否展开。 */
   leftOpen: boolean
   /** 右侧检查器面板是否展开。 */
   rightOpen: boolean
-  /** 出件优先走本地引擎（文件不上传；失败自动回退云端）。与设备算力相关，故为设备本地偏好。 */
-  preferLocalProcessing: boolean
-  /** 本地处理的文件大小上限（MB）；0 = 不限制。超限走云端，防浏览器内存峰值。 */
+  /** 本地处理的文件大小上限（MB）；0 = 不限制。超限时提示调整，绝不上传。 */
   localMaxMB: number
 }
 
@@ -65,7 +63,7 @@ export type EditorState = PersistedState & {
   lastAddedId: string | null
   outputPassword: string
   busy: string
-  /** 服务端设置文档版本号（乐观并发）。 */
+  /** 本机库设置版本，用于刷新与备份恢复。 */
   settingsVersion: number
   /** 当前视口宽度，用于窄屏判定（瞬时态，不持久化）。 */
   viewportWidth: number
@@ -97,7 +95,6 @@ export type EditorState = PersistedState & {
   setOutputPassword: (password: string) => void
   toggleLeftPanel: (open?: boolean) => void
   toggleRightPanel: (open?: boolean) => void
-  setPreferLocalProcessing: (on: boolean) => void
   setLocalMaxMB: (mb: number) => void
   setViewportWidth: (width: number) => void
   closeMobilePanel: () => void
@@ -155,7 +152,6 @@ export const useEditorStore = create<EditorState>()(
       outputNameTemplate: persisted.outputNameTemplate || '{原名}-已盖章',
       leftOpen: persisted.leftOpen ?? true,
       rightOpen: persisted.rightOpen ?? true,
-      preferLocalProcessing: persisted.preferLocalProcessing ?? true,
       localMaxMB: Number.isFinite(persisted.localMaxMB) && Number(persisted.localMaxMB) >= 0 ? Number(persisted.localMaxMB) : 500,
 
       configs: {},
@@ -200,7 +196,7 @@ export const useEditorStore = create<EditorState>()(
               }
             : state.stampDefaults,
           stampMeta: settings.stampMeta ?? state.stampMeta,
-          outputNameTemplate: settings.outputNameTemplate || state.outputNameTemplate
+          outputNameTemplate: settings.outputNameTemplate ?? state.outputNameTemplate
         })),
 
       setSettingsVersion: (settingsVersion) => set({ settingsVersion }),
@@ -360,7 +356,6 @@ export const useEditorStore = create<EditorState>()(
           return patch
         }),
       closeMobilePanel: () => set({ mobilePanel: null }),
-      setPreferLocalProcessing: (preferLocalProcessing) => set({ preferLocalProcessing }),
       setLocalMaxMB: (localMaxMB) => set({ localMaxMB: Math.max(0, localMaxMB) }),
       select: (selection) => set({ selection }),
       setSelectedStampIds: (selectedStampIds) => set({ selectedStampIds, selectedPageNumbers: [] }),
@@ -503,7 +498,6 @@ useEditorStore.subscribe((state) => {
       outputNameTemplate: state.outputNameTemplate,
       leftOpen: state.leftOpen,
       rightOpen: state.rightOpen,
-      preferLocalProcessing: state.preferLocalProcessing,
       localMaxMB: state.localMaxMB
     }
     try {
@@ -599,7 +593,7 @@ export function withinLocalLimit(state: EditorState, bytes: number): boolean {
   return state.localMaxMB <= 0 || bytes <= state.localMaxMB * 1024 * 1024
 }
 
-/** 抽取要同步到服务端的库设置子集。 */
+/** 抽取要保存到本机 IndexedDB 的库设置子集。 */
 export function librarySettings(state: EditorState): LibrarySettings {
   return {
     stampDefaults: state.stampDefaults,

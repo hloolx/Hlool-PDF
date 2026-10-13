@@ -19,12 +19,17 @@ import { useShortcutHelp } from '../features/help/ShortcutHelp'
 export function useGlobalKeys() {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing) return
+      const target = event.target instanceof Element ? event.target : document.activeElement
+      // 菜单、弹窗及浮层保有各自的快捷键；不能修改它们背后的文档。
+      if (target?.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) return
       const mod = event.ctrlKey || event.metaKey
       if (isEditingField(document.activeElement)) {
         if (event.key === 'Escape') (document.activeElement as HTMLElement).blur()
         return
       }
       const state = useEditorStore.getState()
+      if (state.busy && event.key !== 'Escape' && event.key !== '?') return
 
       if (event.key === '?' || (event.key === '/' && event.shiftKey)) {
         event.preventDefault()
@@ -58,6 +63,16 @@ export function useGlobalKeys() {
 
       switch (event.key) {
         case 'Escape': {
+          if (state.mobilePanel) {
+            const side = state.mobilePanel
+            state.closeMobilePanel()
+            requestAnimationFrame(() => {
+              const controls = document.querySelectorAll<HTMLElement>(`[data-panel-toggle="${side}"]`)
+              Array.from(controls).find((control) => control.getClientRects().length > 0)?.focus()
+            })
+            event.preventDefault()
+            return
+          }
           if (state.selectedStampIds.length > 0 || state.selectedPageNumbers.length > 0) {
             state.clearBulkSelection()
             event.preventDefault()

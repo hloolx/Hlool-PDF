@@ -1,47 +1,52 @@
 /**
  * 页面操作本地引擎：删/重排/多文件拼接/旋转烘录/图片转 PDF 在浏览器完成，
- * 语义对齐服务端 /api/compose（pdf.go ComposePDF + rotate.go RotatePagesBaked）
- * 与 /api/image-to-pdf（pdf.go ImageToPDF）。对齐由 harness 的 compose/image
- * 用例逐像素验收（scripts/verify-local-engine.ps1）——改任何一边都必须同步另一边。
+ * 与可选 Go 参考引擎的 ComposePDF / RotatePagesBaked / ImageToPDF 逐像素对比
+ * （scripts/verify-local-engine.ps1），用于验证输出几何语义。
  *
- * 失败策略与盖章引擎一致：任何异常抛给调用方（workspace/actions.ts）回退云端。
+ * 失败时抛给调用方说明原因，文件始终留在浏览器。
  * 懒加载分包，严禁进入口包（拆包约定见 workspace/boot.ts）。
  */
-import { PDFDocument } from 'pdf-lib'
+import { PDFDocument, type PDFPage } from 'pdf-lib'
 import type { ComposePageRef } from '../workspace/actions'
 import { bakePageRotation, embedWithInterpolate } from './pdfBake'
+import { isEncryptedPdfError } from './localSafety'
 
 /**
  * 把多个源 PDF 的页按给定顺序拼成一个新 PDF；每页可带 90° 倍数的顺时针旋转，
  * 旋转按「自带 /Rotate + 请求角」烘进页面几何（rotate.go 同式）。
- * password 用于解锁受保护的源（qpdf-wasm，产物为明文，与服务端行为一致）。
+ * password 可统一指定，也可为各源分别指定；qpdf-wasm 解锁后产物为明文。
  */
-export async function composePdfLocally(blobs: Blob[], pages: ComposePageRef[], password?: string): Promise<Uint8Array> {
+export async function composePdfLocally(
+  blobs: Blob[],
+  pages: ComposePageRef[],
+  password?: string | (string | undefined)[]
+): Promise<Uint8Array> {
   if (pages.length === 0) throw new Error('至少需要一页')
-  const sources = await Promise.all(
-    blobs.map(async (blob) => maybeDecrypt(new Uint8Array(await blob.arrayBuffer()), password))
-  )
-  const srcDocs = await Promise.all(sources.map((bytes) => PDFDocument.load(bytes, { updateMetadata: false })))
-
+  const groups = new Map<number, Array<{ ref: ComposePageRef; outputIndex: number }>>()
   for (const ref of pages) {
-    if (ref.file < 0 || ref.file >= srcDocs.length) throw new Error('页面引用了未知的源文件')
-    if (ref.pageNumber < 1 || ref.pageNumber > srcDocs[ref.file].getPageCount()) {
-      throw new Error(`页码越界: ${ref.pageNumber}`)
-    }
+    if (!Number.isInteger(ref.file) || ref.file < 0 || ref.file >= blobs.length) throw new Error('页面引用了未知的源文件')
+    if (!Number.isInteger(ref.pageNumber) || ref.pageNumber < 1) throw new Error(`页码无效：${ref.pageNumber}`)
+    const rotate = ref.rotate ?? 0
+    if (!Number.isFinite(rotate) || rotate % 90 !== 0) throw new Error('旋转角必须是 90 的倍数')
   }
+  pages.forEach((ref, outputIndex) => {
+    const group = groups.get(ref.file) ?? []
+    group.push({ ref, outputIndex })
+    groups.set(ref.file, group)
+  })
 
   const out = await PDFDocument.create()
-  // 与服务端 buildComposeRuns 同构：连续同文件段一次 copyPages（保持顺序，可重复）。
-  let i = 0
-  while (i < pages.length) {
-    const file = pages[i].file
-    let j = i
-    while (j < pages.length && pages[j].file === file) j++
-    const indices = pages.slice(i, j).map((ref) => ref.pageNumber - 1)
-    const copied = await out.copyPages(srcDocs[file], indices)
-    for (const page of copied) out.addPage(page)
-    i = j
+  const copiedPages: PDFPage[] = new Array(pages.length)
+  // 每次只打开一个被引用的源，避免同时保留所有来源的字节和解析树。
+  for (const [file, group] of groups) {
+    const source = await loadSource(blobs[file], Array.isArray(password) ? password[file] : password)
+    for (const { ref } of group) {
+      if (ref.pageNumber > source.getPageCount()) throw new Error(`页码越界：${ref.pageNumber}`)
+    }
+    const copied = await out.copyPages(source, group.map(({ ref }) => ref.pageNumber - 1))
+    group.forEach(({ outputIndex }, index) => { copiedPages[outputIndex] = copied[index] })
   }
+  for (const page of copiedPages) out.addPage(page)
 
   // 逐输出页烘录请求旋转（0 保留原样——含自带 /Rotate，与服务端只处理 rotations map 一致）。
   const outPages = out.getPages()
@@ -55,15 +60,17 @@ export async function composePdfLocally(blobs: Blob[], pages: ComposePageRef[], 
   return out.save()
 }
 
-/** 源是否加密以「pdf-lib 能否打开」判定；加密则 qpdf 解锁（缺密码直接抛错回退云端）。 */
-async function maybeDecrypt(bytes: Uint8Array, password?: string): Promise<Uint8Array> {
+/** 仅加密错误尝试解锁；损坏的 PDF 不重复解析或掩盖原始错误。 */
+async function loadSource(blob: Blob, password?: string): Promise<PDFDocument> {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
   try {
-    await PDFDocument.load(bytes, { updateMetadata: false })
-    return bytes
+    return await PDFDocument.load(bytes, { updateMetadata: false })
   } catch (err) {
-    if (!password) throw err
+    if (!isEncryptedPdfError(err)) throw err
     const { decryptPdf } = await import('./qpdf')
-    return decryptPdf(bytes, password)
+    // 空用户密码的权限保护 PDF 也需要解锁，不能用 password 的真值跳过。
+    const unlocked = await decryptPdf(bytes, password ?? '')
+    return PDFDocument.load(unlocked, { updateMetadata: false })
   }
 }
 

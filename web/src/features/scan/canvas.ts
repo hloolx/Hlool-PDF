@@ -50,6 +50,7 @@ export function applyScanEffect(
 }
 
 function drawNoise(ctx: CanvasRenderingContext2D, intensity: number, width: number, height: number) {
+  intensity = Number.isFinite(intensity) ? Math.min(1, Math.max(0, intensity)) : 0
   if (intensity <= 0) return
   const count = Math.max(1, Math.floor(intensity * 300))
   ctx.fillStyle = 'black'

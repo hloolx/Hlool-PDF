@@ -1,0 +1,40 @@
+name: Optional Go reference comparison
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            scripts/verify-local-engine/package-lock.json
+      - run: go test ./...
+      - run: npm --prefix web ci
+      - name: Install comparison harness
+        working-directory: scripts/verify-local-engine
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - run: node scripts/verify-local-engine/verify.mjs
+      - name: Save comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-comparison
+          path: |
+            scripts/verify-local-engine/.work/report.json
+            scripts/verify-local-engine/.work/diff/
+          if-no-files-found: ignore

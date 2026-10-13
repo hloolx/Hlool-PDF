@@ -226,8 +226,9 @@ type PageDiff = { ratio: number; w: number; h: number; sizeMismatch?: string; he
 type CompareResult = { pages: PageDiff[]; error?: string }
 
 async function renderPdf(bytes: Uint8Array, scale: number, password?: string): Promise<ImageData[]> {
-  const doc = await pdfjsLib.getDocument({ data: bytes, password }).promise
+  const loading = pdfjsLib.getDocument({ data: bytes, password })
   try {
+    const doc = await loading.promise
     const out: ImageData[] = []
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i)
@@ -241,7 +242,7 @@ async function renderPdf(bytes: Uint8Array, scale: number, password?: string): P
     }
     return out
   } finally {
-    void doc.destroy()
+    await loading.destroy()
   }
 }
 

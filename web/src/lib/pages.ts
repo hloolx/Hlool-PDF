@@ -3,6 +3,9 @@ export type PageExpression = {
   invalidParts: string[]
 }
 
+/** Bound expansion even for malformed imported metadata or enormous user-entered ranges. */
+export const MAX_PAGE_SELECTION = 100_000
+
 export function emptyPageExpression(): PageExpression {
   return { pages: [], invalidParts: [] }
 }
@@ -17,7 +20,11 @@ export function normalizePageExpr(value: string) {
 /** 解析 `1,3-5` / `全部` 形式的页码表达式。 */
 export function parsePageExpression(text: string, pageCount: number): PageExpression {
   const normalized = normalizePageExpr(text)
+  if (!Number.isSafeInteger(pageCount) || pageCount < 1) {
+    return { pages: [], invalidParts: [normalized] }
+  }
   if (normalized === 'all') {
+    if (pageCount > MAX_PAGE_SELECTION) return { pages: [], invalidParts: [`全部（最多 ${MAX_PAGE_SELECTION} 页）`] }
     return { pages: Array.from({ length: pageCount }, (_, i) => i + 1), invalidParts: [] }
   }
   const pages = new Set<number>()
@@ -25,22 +32,32 @@ export function parsePageExpression(text: string, pageCount: number): PageExpres
   for (const raw of normalized.split(/[,，]/)) {
     const part = raw.trim()
     if (!part) continue
+    if (!/^\d+(?:\s*-\s*\d+)?$/.test(part)) {
+      invalidParts.push(part)
+      continue
+    }
     if (part.includes('-')) {
       const [a, b] = part.split('-').map((v) => Number(v.trim()))
-      if (!Number.isInteger(a) || !Number.isInteger(b)) {
+      if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b)) {
         invalidParts.push(part)
         continue
       }
       const start = Math.min(a, b)
       const end = Math.max(a, b)
-      if (start < 1 || end > pageCount) {
+      if (start < 1 || end > pageCount || end - start + 1 > MAX_PAGE_SELECTION) {
         invalidParts.push(part)
         continue
       }
-      for (let p = start; p <= end; p++) pages.add(p)
+      for (let p = start; p <= end; p++) {
+        if (pages.size >= MAX_PAGE_SELECTION && !pages.has(p)) {
+          invalidParts.push(part)
+          break
+        }
+        pages.add(p)
+      }
     } else {
       const p = Number(part)
-      if (Number.isInteger(p) && p >= 1 && p <= pageCount) {
+      if (Number.isSafeInteger(p) && p >= 1 && p <= pageCount && (pages.size < MAX_PAGE_SELECTION || pages.has(p))) {
         pages.add(p)
       } else {
         invalidParts.push(part)
